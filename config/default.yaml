@@ -1,0 +1,18 @@
+pipeline:
+  enabled_stages:
+    - profiling
+    - exploration
+    - dimensionality
+    - autoencoder
+    - unsupervised
+    - supervised
+    - findings
+  fail_fast: false
+  cache_state: false
+
+report:
+  title: "Explot Report"
+  include_debug: false
+
+budget:
+  mode: full

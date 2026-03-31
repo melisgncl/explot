@@ -1,0 +1,36 @@
+stages:
+  - name: profiling
+    module: explot.stages.profiling.stage
+    class_name: ProfilingStage
+    optional_deps: []
+  - name: exploration
+    module: explot.stages.exploration.stage
+    class_name: ExplorationStage
+    optional_deps: []
+  - name: dimensionality
+    module: explot.stages.dimensionality.stage
+    class_name: DimensionalityStage
+    optional_deps: []
+  - name: autoencoder
+    module: explot.stages.autoencoder.stage
+    class_name: AutoencoderStage
+    optional_deps: []
+  - name: unsupervised
+    module: explot.stages.unsupervised.stage
+    class_name: UnsupervisedStage
+    optional_deps:
+      - exploration
+  - name: supervised
+    module: explot.stages.supervised.stage
+    class_name: SupervisedStage
+    optional_deps:
+      - profiling
+      - unsupervised
+  - name: findings
+    module: explot.stages.findings.stage
+    class_name: FindingsStage
+    optional_deps:
+      - exploration
+      - dimensionality
+      - unsupervised
+      - supervised
