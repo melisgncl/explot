@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Explot Demo Reports</title>
+  <style>
+    :root {
+      --bg: #f4f7f2;
+      --paper: #ffffff;
+      --ink: #183024;
+      --muted: #5e7467;
+      --line: #d7e1d9;
+      --accent: #1f6b4f;
+      --accent-soft: #e2f1e8;
+      --shadow: 0 16px 40px rgba(24, 48, 36, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(31,107,79,0.10), transparent 28%),
+        linear-gradient(180deg, #eef5f0 0%, var(--bg) 100%);
+    }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 40px 20px 56px;
+    }
+    .hero, .card {
+      background: rgba(255,255,255,0.95);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+    }
+    .hero {
+      padding: 28px;
+      margin-bottom: 22px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(2rem, 4vw, 3.4rem);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+    }
+    p {
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 18px;
+    }
+    .card {
+      padding: 22px;
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 1.2rem;
+      letter-spacing: -0.02em;
+    }
+    a.button {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: white;
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .hint {
+      margin-top: 22px;
+      padding: 18px 20px;
+      border-radius: 18px;
+      background: var(--accent-soft);
+      color: var(--ink);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <p class="eyebrow">Explot</p>
+      <h1>Demo Reports</h1>
+      <p>
+        These are sample HTML reports generated from the datasets included in the repository.
+        Each report is a self-contained first-pass analysis of a tabular dataset.
+      </p>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <p class="eyebrow">Demo 1</p>
+        <h2>Breast Cancer</h2>
+        <p>Fast-mode report generated from the breast cancer dataset.</p>
+        <a class="button" href="./reports/breast_cancer_fast_report.html">Open Report</a>
+      </article>
+
+      <article class="card">
+        <p class="eyebrow">Demo 2</p>
+        <h2>Sample M5 Clustering</h2>
+        <p>Fast-mode report showing clustering-oriented exploratory signals.</p>
+        <a class="button" href="./reports/sample_m5_fast_report.html">Open Report</a>
+      </article>
+
+      <article class="card">
+        <p class="eyebrow">Demo 3</p>
+        <h2>Sleep Health</h2>
+        <p>Fast-mode report for the sleep health dataset with trust-aware findings.</p>
+        <a class="button" href="./reports/sleep_health_fast_report.html">Open Report</a>
+      </article>
+
+      <article class="card">
+        <p class="eyebrow">Demo 4</p>
+        <h2>Train Dataset</h2>
+        <p>Fast-mode report generated from the included train dataset.</p>
+        <a class="button" href="./reports/train_fast_report.html">Open Report</a>
+      </article>
+    </section>
+
+    <div class="hint">
+      To run Explot on your own data, install the package from the repository and use
+      <code>explot path/to/your_data.csv -o my_report.html</code>.
+    </div>
+  </main>
+</body>
+</html>
