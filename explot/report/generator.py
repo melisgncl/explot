@@ -408,11 +408,13 @@ class ReportGenerator:
         profile_rows = []
         for name, profile in top_columns:
             summary = profile.get("summary")
-            if summary:
+            if summary and summary.get("mean") is not None and summary.get("std") is not None:
                 detail = (
                     f"mean {summary['mean']:.2f}, std {summary['std']:.2f}, "
                     f"zeros {profile.get('zero_percent', 0.0)}%"
                 )
+            elif summary:
+                detail = f"all null ({profile.get('null_percent', 0)}%)"
             else:
                 detail = ", ".join(
                     f"{key}: {value}" for key, value in list(profile.get("top_values", {}).items())[:3]
