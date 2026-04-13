@@ -13,6 +13,8 @@ class PipelineState:
     raw_df: pd.DataFrame
     results: dict[str, StageResult] = field(default_factory=dict)
     artifacts: dict[str, Any] = field(default_factory=dict)
+    target_column: str | None = None
+    task_type: str | None = None  # "classification", "regression", or None (auto)
 
     def stage_output(self, stage_name: str, key: str, default: Any = None) -> Any:
         result = self.results.get(stage_name)

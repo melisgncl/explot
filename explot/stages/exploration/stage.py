@@ -29,6 +29,11 @@ class ExplorationStage(BaseStage):
         top_feature_distributions = self._top_feature_distributions(numeric_df, top_variable_features)
         grouped_distributions = self._grouped_distributions(df, numeric_df, grouping_candidates, top_variable_features)
 
+        # Feature-target correlations (uses supervised target hints from state)
+        feature_target_correlations = self._feature_target_correlations(
+            df, numeric_df, profiling, state,
+        )
+
         outputs = {
             "correlation_matrix": correlation_matrix,
             "redundant_pairs": redundant_pairs,
@@ -40,12 +45,14 @@ class ExplorationStage(BaseStage):
             "outlier_rows": outlier_rows,
             "top_feature_distributions": top_feature_distributions,
             "grouped_distributions": grouped_distributions,
+            "feature_target_correlations": feature_target_correlations,
         }
         figures = {
             "correlation_heatmap": self._heatmap_svg(correlation_matrix),
             "top_variable_features": json.dumps(top_variable_features),
             "distribution_overview": self._distribution_grid_svg(top_feature_distributions),
             "grouped_distributions": self._grouped_box_svg(grouped_distributions),
+            "feature_target_correlations": self._feature_target_bar_svg(feature_target_correlations),
         }
         interpretations = {
             "correlation_heatmap": self._correlation_interpretation(redundant_pairs, correlation_matrix),
@@ -54,6 +61,7 @@ class ExplorationStage(BaseStage):
             "row_outliers": self._outlier_interpretation(outlier_rows, numeric_df),
             "distribution_overview": self._distribution_interpretation(top_feature_distributions),
             "grouped_distributions": self._grouped_distribution_interpretation(grouped_distributions),
+            "feature_target_correlations": self._feature_target_interpretation(feature_target_correlations),
         }
         return StageResult(
             stage_name=self.meta.name,
@@ -67,9 +75,8 @@ class ExplorationStage(BaseStage):
         if numeric_df.empty or numeric_df.shape[1] < 2:
             return {}
         corr = numeric_df.corr(method="pearson", min_periods=max(3, int(len(numeric_df) * 0.1)))
-        corr = corr.fillna(0.0)
         return {
-            str(col): {str(inner): float(value) for inner, value in row.items()}
+            str(col): {str(inner): None if pd.isna(value) else float(value) for inner, value in row.items()}
             for col, row in corr.iterrows()
         }
 
@@ -81,6 +88,8 @@ class ExplorationStage(BaseStage):
         for idx, left in enumerate(columns):
             for right in columns[idx + 1 :]:
                 value = correlation_matrix[left][right]
+                if value is None:
+                    continue
                 if abs(value) > 0.95:
                     pairs.append({"columns": [left, right], "correlation": round(float(value), 4)})
         pairs.sort(key=lambda item: abs(item["correlation"]), reverse=True)
@@ -97,16 +106,18 @@ class ExplorationStage(BaseStage):
         if missing.sum().sum() == 0:
             return {}, "minimal"
         active_missing = missing.loc[:, missing.sum(axis=0) > 0]
-        missing_corr = active_missing.corr().fillna(0.0) if not active_missing.empty else missing.corr().fillna(0.0)
+        missing_corr = active_missing.corr() if not active_missing.empty else missing.corr()
         matrix = {
-            str(col): {str(inner): float(value) for inner, value in row.items()}
+            str(col): {str(inner): None if pd.isna(value) else float(value) for inner, value in row.items()}
             for col, row in missing_corr.iterrows()
         }
         off_diagonal = []
         columns = list(missing_corr.columns)
         for idx, left in enumerate(columns):
             for right in columns[idx + 1 :]:
-                off_diagonal.append(abs(float(missing_corr.loc[left, right])))
+                val = missing_corr.loc[left, right]
+                if pd.notna(val):
+                    off_diagonal.append(abs(float(val)))
         mean_abs_corr = float(np.mean(off_diagonal)) if off_diagonal else 0.0
         max_abs_corr = float(np.max(off_diagonal)) if off_diagonal else 0.0
         if max_abs_corr > 0.5 or mean_abs_corr > 0.25:
@@ -146,7 +157,7 @@ class ExplorationStage(BaseStage):
         distances = np.sqrt(np.sum(np.square(scaled.to_numpy(dtype=float)), axis=1))
         n_outliers = min(len(usable), max(1, int(np.ceil(len(usable) * 0.01))))
         ranked = np.argsort(distances)[-n_outliers:]
-        row_indices = sorted(int(usable.index[idx]) for idx in ranked)
+        row_indices = sorted(usable.iloc[ranked].index.tolist())
         return row_indices
 
     def _hopkins_statistic(self, numeric_df: pd.DataFrame) -> float | None:
@@ -346,6 +357,135 @@ class ExplorationStage(BaseStage):
             "Differences in medians and spread help show whether simple category splits correspond to meaningful numeric shifts."
         )
 
+    # ---- Feature-target correlation ----
+
+    def _feature_target_correlations(
+        self,
+        df: pd.DataFrame,
+        numeric_df: pd.DataFrame,
+        profiling,
+        state,
+    ) -> list[dict[str, object]]:
+        """Compute correlation between each numeric feature and candidate targets."""
+        # Identify target columns: explicit from state, or auto-detect from profiling
+        target_cols: list[str] = []
+        if hasattr(state, "target_column") and state.target_column and state.target_column in df.columns:
+            target_cols = [state.target_column]
+        else:
+            # Use profiling heuristics: categorical with 2-20 unique values
+            cat_cols = profiling.outputs.get("categorical_column_names", []) if profiling.success else []
+            for col in cat_cols:
+                if 2 <= df[col].nunique() <= 20:
+                    target_cols.append(col)
+                    if len(target_cols) >= 3:
+                        break
+
+        if not target_cols or numeric_df.empty:
+            return []
+
+        results: list[dict[str, object]] = []
+        for target_col in target_cols:
+            target_series = df[target_col].dropna()
+            if len(target_series) < 20:
+                continue
+
+            is_numeric_target = pd.api.types.is_numeric_dtype(target_series)
+            correlations: list[dict[str, float]] = []
+
+            for feat_col in numeric_df.columns:
+                if feat_col == target_col:
+                    continue
+                aligned = pd.DataFrame({
+                    "feature": pd.to_numeric(numeric_df[feat_col], errors="coerce"),
+                    "target": df[target_col],
+                }).dropna()
+                if len(aligned) < 20:
+                    continue
+
+                if is_numeric_target:
+                    target_num = pd.to_numeric(aligned["target"], errors="coerce").dropna()
+                    feat_num = aligned.loc[target_num.index, "feature"]
+                    if len(target_num) < 20 or target_num.nunique() < 2 or feat_num.nunique() < 2:
+                        continue
+                    corr = float(np.corrcoef(feat_num.to_numpy(dtype=float), target_num.to_numpy(dtype=float))[0, 1])
+                    if np.isfinite(corr):
+                        correlations.append({"feature": str(feat_col), "correlation": round(corr, 4), "method": "pearson"})
+                else:
+                    # Eta-squared: ratio of between-group variance to total variance
+                    groups = aligned.groupby("target")["feature"]
+                    grand_mean = float(aligned["feature"].mean())
+                    ss_between = sum(len(g) * (float(g.mean()) - grand_mean) ** 2 for _, g in groups)
+                    ss_total = float(((aligned["feature"] - grand_mean) ** 2).sum())
+                    if ss_total > 0:
+                        eta_sq = ss_between / ss_total
+                        correlations.append({"feature": str(feat_col), "correlation": round(float(np.sqrt(eta_sq)), 4), "method": "eta"})
+
+            correlations.sort(key=lambda x: abs(x["correlation"]), reverse=True)
+            results.append({
+                "target": str(target_col),
+                "is_numeric_target": is_numeric_target,
+                "correlations": correlations[:15],
+            })
+        return results
+
+    def _feature_target_interpretation(self, feature_target_correlations: list[dict[str, object]]) -> str:
+        if not feature_target_correlations:
+            return "Feature-target correlation was skipped because no suitable target columns were identified."
+        parts = []
+        for item in feature_target_correlations:
+            corrs = item["correlations"]
+            if not corrs:
+                parts.append(f"No features showed meaningful correlation with target '{item['target']}'.")
+                continue
+            top3 = corrs[:3]
+            method = "Pearson r" if item["is_numeric_target"] else "eta (sqrt of eta-squared)"
+            names = ", ".join(f"{c['feature']} ({c['correlation']:.2f})" for c in top3)
+            parts.append(f"Top features correlated with '{item['target']}' ({method}): {names}.")
+        return " ".join(parts)
+
+    def _feature_target_bar_svg(self, feature_target_correlations: list[dict[str, object]]) -> str:
+        if not feature_target_correlations:
+            return ""
+        # Render first target's correlations as horizontal bar chart
+        item = feature_target_correlations[0]
+        corrs = item["correlations"][:10]
+        if not corrs:
+            return ""
+
+        bar_h = 22
+        gap = 4
+        margin_left = 120
+        margin_right = 50
+        margin_top = 30
+        chart_w = 300
+        width = margin_left + chart_w + margin_right
+        height = margin_top + len(corrs) * (bar_h + gap) + 20
+
+        bars = []
+        max_abs = max(abs(c["correlation"]) for c in corrs) if corrs else 1.0
+        max_abs = max(max_abs, 0.01)
+
+        for idx, c in enumerate(corrs):
+            y = margin_top + idx * (bar_h + gap)
+            bar_w = abs(c["correlation"]) / max_abs * (chart_w - 20)
+            color = "rgba(15,106,139,0.7)" if c["correlation"] >= 0 else "rgba(239,125,87,0.7)"
+            bars.append(
+                f"<text x='{margin_left - 6}' y='{y + 15}' font-size='10' text-anchor='end' fill='#1e2a33'>{c['feature']}</text>"
+                f"<rect x='{margin_left}' y='{y}' width='{bar_w:.1f}' height='{bar_h}' fill='{color}' rx='3' />"
+                f"<text x='{margin_left + bar_w + 4:.1f}' y='{y + 15}' font-size='10' fill='#5f7584'>{c['correlation']:.2f}</text>"
+            )
+
+        method_label = "Pearson r" if item["is_numeric_target"] else "eta"
+        return (
+            f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {width} {height}' "
+            "style='max-width:520px;background:#f8fbfd;border:1px solid #d8e3ea;border-radius:12px'>"
+            f"<rect width='{width}' height='{height}' fill='#f8fbfd' rx='12' />"
+            f"<text x='{width / 2:.1f}' y='18' font-size='13' text-anchor='middle' fill='#193042'>"
+            f"Feature–Target Correlation ({method_label}) for '{item['target']}'</text>"
+            + "".join(bars)
+            + "</svg>"
+        )
+
     def _heatmap_svg(self, correlation_matrix: dict[str, dict[str, float | None]]) -> str:
         if not correlation_matrix:
             return ""
@@ -369,8 +509,11 @@ class ExplorationStage(BaseStage):
                         f"<text x='{x + 12}' y='88' font-size='10' text-anchor='start' "
                         f"fill='#1e2a33' transform='rotate(-45 {x + 12} 88)'>{col_name}</text>"
                     )
-                value = float(correlation_matrix[row_name][col_name])
-                color = self._corr_color(value)
+                raw_value = correlation_matrix[row_name][col_name]
+                if raw_value is None:
+                    color = "#d0d0d0"
+                else:
+                    color = self._corr_color(float(raw_value))
                 rects.append(
                     f"<rect x='{x}' y='{y}' width='{size}' height='{size}' fill='{color}' stroke='#ffffff' />"
                 )

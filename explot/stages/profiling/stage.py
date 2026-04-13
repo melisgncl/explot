@@ -18,6 +18,7 @@ class ProfilingStage(BaseStage):
         hooks.progress(self.meta.name, 10, "Collecting dataset shape and column types.")
 
         numeric_columns = [column for column in df.columns if is_numeric_dtype(df[column])]
+        datetime_columns: list[str] = []
         categorical_columns = [column for column in df.columns if column not in numeric_columns]
         hooks.progress(self.meta.name, 45, "Summarizing columns and suspicious patterns.")
 
@@ -58,6 +59,13 @@ class ProfilingStage(BaseStage):
             role_guess = self._guess_column_role(str(column), series, len(df), cardinality, profile)
             profile["role_guess"] = role_guess
 
+            # Datetime detection and profiling
+            if role_guess == "time_like":
+                datetime_columns.append(str(column))
+                dt_info = self._datetime_profile(series)
+                if dt_info:
+                    profile["datetime_info"] = dt_info
+
             column_profiles[str(column)] = profile
 
             if len(non_null) and top_frequency >= 0.95:
@@ -76,6 +84,20 @@ class ProfilingStage(BaseStage):
                         "details": f"Null rate is {null_count / len(df):.1%}.",
                     }
                 )
+            # Mixed-type detection: object columns where some values are numeric
+            if not is_numeric_dtype(series) and not non_null.empty and len(non_null) >= 10:
+                sample = non_null.head(200).astype(str)
+                numeric_parseable = pd.to_numeric(sample, errors="coerce").notna().sum()
+                ratio = numeric_parseable / len(sample)
+                if 0.1 < ratio < 0.9:
+                    suspicious_columns.append({
+                        "name": str(column),
+                        "reason": "mixed_types",
+                        "details": (
+                            f"{ratio:.0%} of sampled values are numeric-parseable in a non-numeric column. "
+                            "This may indicate mixed data types requiring cleanup."
+                        ),
+                    })
             column_name = str(column).lower()
             if (
                 role_guess == "id_like"
@@ -89,6 +111,28 @@ class ProfilingStage(BaseStage):
                         "details": "Column has near-row-level uniqueness and looks like an identifier.",
                     }
                 )
+
+        # Duplicate row detection
+        duplicate_count = int(df.duplicated().sum())
+        duplicate_percent = round(duplicate_count / max(len(df), 1) * 100.0, 2)
+        if duplicate_percent > 5.0:
+            suspicious_columns.append({
+                "name": "(rows)",
+                "reason": "duplicate_rows",
+                "details": f"{duplicate_count} exact duplicate rows ({duplicate_percent:.1f}% of dataset).",
+            })
+
+        # Sample-to-feature ratio
+        n_features = len(numeric_columns)
+        if n_features > 0 and len(df) < 10 * n_features:
+            suspicious_columns.append({
+                "name": "(dataset)",
+                "reason": "high_dimensional",
+                "details": (
+                    f"Only {len(df)} rows for {n_features} numeric features "
+                    f"(ratio {len(df) / n_features:.1f}:1). Models may overfit."
+                ),
+            })
 
         normalization_guess = self._guess_normalization(df[numeric_columns]) if numeric_columns else "unknown"
         quality_breakdown = self._quality_breakdown(df, suspicious_columns, column_profiles)
@@ -108,6 +152,9 @@ class ProfilingStage(BaseStage):
             "column_profiles": column_profiles,
             "numeric_column_names": [str(column) for column in numeric_columns],
             "categorical_column_names": [str(column) for column in categorical_columns],
+            "datetime_column_names": datetime_columns,
+            "duplicate_row_count": duplicate_count,
+            "duplicate_row_percent": duplicate_percent,
             "suspicious_columns": suspicious_columns,
             "normalization_guess": normalization_guess,
             "quality_score": quality_score,
@@ -121,6 +168,9 @@ class ProfilingStage(BaseStage):
                 f"Dataset contains {outputs['n_rows']} rows and {outputs['n_columns']} columns. "
                 f"Detected {len(numeric_columns)} numeric columns and "
                 f"{len(categorical_columns)} non-numeric columns."
+                + (f" {len(datetime_columns)} datetime column(s) detected." if datetime_columns else "")
+                + (f" {duplicate_count} exact duplicate rows found ({duplicate_percent:.1f}%)."
+                   if duplicate_count > 0 else "")
             ),
             "normalization_guess": self._normalization_interpretation(normalization_guess, numeric_columns),
             "quality_score": self._quality_interpretation(quality_score, quality_breakdown, suspicious_columns),
@@ -180,6 +230,45 @@ class ProfilingStage(BaseStage):
         parsed = pd.to_datetime(sample, errors="coerce")
         return bool((~parsed.isna()).mean() >= 0.8)
 
+    def _datetime_profile(self, series: pd.Series) -> dict[str, str] | None:
+        """Parse a datetime-like column and return range and granularity."""
+        try:
+            if is_datetime64_any_dtype(series):
+                parsed = series.dropna()
+            else:
+                parsed = pd.to_datetime(series.dropna().astype(str), errors="coerce").dropna()
+            if len(parsed) < 2:
+                return None
+            dt_min = parsed.min()
+            dt_max = parsed.max()
+            diffs = parsed.sort_values().diff().dropna()
+            if diffs.empty:
+                granularity = "unknown"
+            else:
+                median_diff = diffs.median()
+                seconds = median_diff.total_seconds()
+                if seconds < 60:
+                    granularity = "seconds"
+                elif seconds < 3600:
+                    granularity = "minutes"
+                elif seconds < 86400:
+                    granularity = "hours"
+                elif seconds < 86400 * 7:
+                    granularity = "days"
+                elif seconds < 86400 * 31:
+                    granularity = "weeks"
+                elif seconds < 86400 * 365:
+                    granularity = "months"
+                else:
+                    granularity = "years"
+            return {
+                "min": str(dt_min),
+                "max": str(dt_max),
+                "granularity": granularity,
+            }
+        except Exception:
+            return None
+
     def _guess_normalization(self, numeric_df: pd.DataFrame) -> str:
         if numeric_df.empty:
             return "unknown"
@@ -223,7 +312,8 @@ class ProfilingStage(BaseStage):
         if non_null.empty:
             return "unknown"
 
-        id_name_hint = lowered == "id" or lowered.endswith("_id") or lowered.endswith("id") or "person_id" in lowered
+        name_tokens = set(lowered.replace("-", "_").split("_"))
+        id_name_hint = lowered == "id" or lowered.endswith("_id") or "id" in name_tokens
         uniqueness_ratio = cardinality / max(len(non_null), 1)
         if id_name_hint and (uniqueness_ratio >= 0.98 or cardinality >= max(20, int(n_rows * 0.01))):
             return "id_like"
@@ -263,21 +353,12 @@ class ProfilingStage(BaseStage):
         return "categorical_text"
 
     def _looks_measurement_like(self, column_name: str) -> bool:
-        return any(
-            token in column_name
-            for token in (
-                "age",
-                "bp",
-                "chol",
-                "score",
-                "rate",
-                "duration",
-                "steps",
-                "temperature",
-                "reads",
-                "count",
-            )
-        )
+        tokens = set(column_name.lower().replace("-", "_").split("_"))
+        measurement_tokens = {
+            "age", "bp", "chol", "score", "rate", "duration",
+            "steps", "temperature", "reads", "count",
+        }
+        return bool(tokens & measurement_tokens)
 
     def _quality_breakdown(
         self,
@@ -293,17 +374,18 @@ class ProfilingStage(BaseStage):
         non_redundancy = 20.0 * max(0.0, 1.0 - redundant_penalty / n_columns)
         suspicious_rate = len(suspicious_columns) / n_columns
         non_suspicious = 20.0 * max(0.0, 1.0 - suspicious_rate)
-        dtype_counts: dict[str, int] = {}
-        for profile in column_profiles.values():
-            dtype = str(profile["dtype"])
-            dtype_counts[dtype] = dtype_counts.get(dtype, 0) + 1
-        dominant_dtype_share = max(dtype_counts.values(), default=0) / n_columns
-        dtype_consistency = 20.0 * dominant_dtype_share
+        # Reward columns having a recognized role (not "unknown") — indicates
+        # the dataset uses appropriate types that the pipeline can interpret.
+        recognized_roles = sum(
+            1 for profile in column_profiles.values()
+            if profile.get("role_guess", "unknown") != "unknown"
+        )
+        type_appropriateness = 20.0 * (recognized_roles / n_columns)
         return {
             "completeness": round(completeness, 2),
             "non_redundancy": round(non_redundancy, 2),
             "non_suspicious": round(non_suspicious, 2),
-            "dtype_consistency": round(dtype_consistency, 2),
+            "type_appropriateness": round(type_appropriateness, 2),
         }
 
     def _normalization_interpretation(self, guess: str, numeric_columns: list[object]) -> str:
@@ -351,7 +433,7 @@ class ProfilingStage(BaseStage):
             f"Completeness {quality_breakdown['completeness']:.1f}, "
             f"non-redundancy {quality_breakdown['non_redundancy']:.1f}, "
             f"non-suspicious {quality_breakdown['non_suspicious']:.1f}, "
-            f"dtype consistency {quality_breakdown['dtype_consistency']:.1f}. "
+            f"type appropriateness {quality_breakdown['type_appropriateness']:.1f}. "
             f"Current review flags: {suspicious_text}."
         )
 

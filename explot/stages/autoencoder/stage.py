@@ -141,7 +141,11 @@ class AutoencoderStage(BaseStage):
             X = torch.from_numpy(transformed_df.to_numpy(dtype=np.float32))
             mu, logvar = model.encode(X)
             reconstructed = model.decode(mu)
-            recon_errors = torch.mean((reconstructed - X) ** 2, dim=1).cpu().numpy()
+            raw_mse = torch.mean((reconstructed - X) ** 2, dim=1).cpu().numpy()
+            # Normalize by input variance so MSE is scale-independent
+            input_var = float(torch.var(X).cpu().item())
+            normalizer = max(input_var, 1e-8)
+            recon_errors = raw_mse / normalizer
             latent = mu.cpu().numpy()
 
         latent_df = pd.DataFrame(
@@ -176,7 +180,9 @@ class AutoencoderStage(BaseStage):
         )
         return (
             f"The DVAE compressed the transformed matrix into {bottleneck_dim} latent dimensions using denoising noise injection and a KL regularizer. "
-            f"Reconstruction MSE is {reconstruction_mse:.4f}, which suggests {quality} nonlinear compression quality."
+            f"Reconstruction MSE is {reconstruction_mse:.4f}, which suggests {quality} nonlinear compression quality. "
+            "Unlike PCA (which finds linear axes), the DVAE captures curved and interacting patterns. "
+            "The supervised stage compares both representations to determine which is more predictive."
             f"{sample_note}"
         )
 

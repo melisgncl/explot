@@ -30,9 +30,19 @@ class Pipeline:
         stage_class = getattr(module, entry["class_name"])
         return stage_class()
 
-    def run(self, input_path: Path, output_path: Path | None = None) -> PipelineState:
+    def run(
+        self,
+        input_path: Path,
+        output_path: Path | None = None,
+        verbose: bool = False,
+        target_column: str | None = None,
+        task_type: str | None = None,
+    ) -> PipelineState:
         state = PipelineState(raw_df=load_table(input_path))
-        hooks = HookRegistry(budget_mode=self.config.budget.mode)
+        state.target_column = target_column
+        state.task_type = task_type if task_type != "auto" else None
+        hooks = HookRegistry(budget_mode=self.config.budget.mode, verbose=verbose)
+        hooks.pipeline_started()
 
         for entry in self.load_manifest():
             stage_name = entry["name"]

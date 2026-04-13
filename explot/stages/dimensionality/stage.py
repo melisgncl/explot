@@ -93,9 +93,9 @@ class DimensionalityStage(BaseStage):
         scaler = StandardScaler()
         try:
             scaled = scaler.fit_transform(cleaned)
-        except Exception:
+        except Exception as exc:
             scaled = cleaned.values
-            transform_log.append("StandardScaler failed — using unscaled values.")
+            transform_log.append(f"StandardScaler failed ({type(exc).__name__}: {exc}) — using unscaled values.")
         else:
             transform_log.append("Applied StandardScaler to all numeric features.")
 

@@ -8,13 +8,20 @@ from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.inspection import permutation_importance
 from sklearn.model_selection import KFold, StratifiedKFold, cross_validate, cross_val_predict
 from sklearn.preprocessing import LabelEncoder
+from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.svm import SVC, SVR
 
 from explot.stages.base import BaseStage, StageMeta, StageResult
 
 _TARGET_KEYWORDS = {"target", "label", "class", "outcome", "group", "type", "diagnosis", "status"}
+_REGRESSION_KEYWORDS = {
+    "score", "value", "price", "cost", "amount", "survival", "duration",
+    "response", "expression", "concentration", "ic50", "ec50", "dose",
+    "yield", "output", "result", "measure", "index", "ratio",
+}
 
 
 def _try_import_xgboost():
@@ -57,12 +64,31 @@ class SupervisedStage(BaseStage):
             return self._empty_result("No features available for supervised probes.")
 
         hooks.progress(self.meta.name, 10, "Detecting candidate target columns.")
-        candidates = self._detect_targets(state.raw_df, profiling)
+
+        # Respect explicit --target flag from user
+        if state.target_column:
+            if state.target_column not in state.raw_df.columns:
+                return self._empty_result(
+                    f"Specified target column '{state.target_column}' not found in data. "
+                    f"Available columns: {', '.join(str(c) for c in state.raw_df.columns[:20])}"
+                )
+            series = state.raw_df[state.target_column].dropna()
+            nunique = series.nunique()
+            if state.task_type == "classification":
+                task = "classification"
+            elif state.task_type == "regression":
+                task = "regression"
+            else:
+                task = "classification" if nunique <= 20 else "regression"
+            candidates = [{"name": state.target_column, "task_type": task, "n_classes": int(nunique)}]
+        else:
+            candidates = self._detect_targets(state.raw_df, profiling)
+
         if not candidates:
             return self._empty_result(
                 "No candidate target columns detected. Explot looks for categorical "
                 "columns with 2-20 unique values or columns named like 'target', 'label', "
-                "'class', 'outcome', etc."
+                "'class', 'outcome', etc. Use --target COLUMN to specify one explicitly."
             )
 
         is_fast = getattr(config, "budget", None) and getattr(config.budget, "mode", "") == "fast"
@@ -133,7 +159,7 @@ class SupervisedStage(BaseStage):
             if "track_b" in track_outputs:
                 model_results_track_b[target_name] = track_outputs["track_b"]["results"]
 
-            diagnostics = self._target_diagnostics(state.raw_df, target_name, valid_idx, track_outputs, is_clf)
+            diagnostics = self._target_diagnostics(state.raw_df, target_name, valid_idx, track_outputs, is_clf, profiling)
             best_track_name, best_track = max(
                 track_outputs.items(),
                 key=lambda item: item[1]["best"]["mean"],
@@ -148,6 +174,10 @@ class SupervisedStage(BaseStage):
             feature_importances[target_name] = {
                 track_name: data["feature_importance"] for track_name, data in track_outputs.items()
             }
+            # Store permutation importance from the best track
+            best_perm = track_outputs.get(best_track_name, {}).get("permutation_importance", [])
+            if best_perm:
+                best_models[target_name]["permutation_importance"] = best_perm
             evaluation_details[target_name] = {
                 track_name: {
                     "metrics": data["best_metrics"],
@@ -249,6 +279,12 @@ class SupervisedStage(BaseStage):
             return None
 
         best = max(results, key=lambda item: item["mean"])
+        baseline_row = next((r for r in results if r["model"] == "Baseline"), None)
+        best_non_baseline = max((r for r in results if r["model"] != "Baseline"), key=lambda item: item["mean"], default=best)
+        if best["model"] == "Baseline" and best_non_baseline["model"] != "Baseline":
+            best = best_non_baseline  # Don't pick Baseline as "best" if real models exist
+        best["baseline_score"] = baseline_row["mean"] if baseline_row else None
+        best["lift_over_baseline"] = round(best["mean"] - baseline_row["mean"], 4) if baseline_row else None
         best_estimator = next(model for name, model in fitted_models if name == best["model"])
         best_metrics, confusion, labels = self._best_model_diagnostics(
             best_estimator,
@@ -264,6 +300,13 @@ class SupervisedStage(BaseStage):
             is_clf,
             X_df.columns.tolist(),
         )
+        perm_importance = self._permutation_importance(
+            best_estimator,
+            X_df.to_numpy(dtype=float),
+            y_encoded,
+            is_clf,
+            X_df.columns.tolist(),
+        )
         return {
             "results": results,
             "best": best,
@@ -271,11 +314,21 @@ class SupervisedStage(BaseStage):
             "confusion_matrix": confusion,
             "labels": labels,
             "feature_importance": feature_importance,
+            "permutation_importance": perm_importance,
         }
 
     def _best_model_diagnostics(self, estimator, X, y, target_labels, is_clf: bool, cv):
         if not is_clf:
-            return {"r2": None}, [], []
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                preds = cross_val_predict(clone(estimator), X, y, cv=cv)
+            residuals = y - preds
+            metrics = {
+                "r2": round(float(1.0 - np.sum(residuals ** 2) / max(np.sum((y - np.mean(y)) ** 2), 1e-12)), 4),
+                "mae": round(float(np.mean(np.abs(residuals))), 4),
+                "rmse": round(float(np.sqrt(np.mean(residuals ** 2))), 4),
+            }
+            return metrics, [], []
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -361,15 +414,18 @@ class SupervisedStage(BaseStage):
             remaining = y_series.index.difference(sampled)
             if len(remaining):
                 top_up = min(max_rows - len(sampled), len(remaining))
-                sampled = sampled.append(remaining.to_series().sample(n=top_up, random_state=42).index)
+                extra = remaining.to_series().sample(n=top_up, random_state=42).index
+                sampled = pd.Index(np.concatenate([sampled.to_numpy(), extra.to_numpy()]))
         return sampled
 
     def _detect_targets(self, raw_df: pd.DataFrame, profiling) -> list[dict]:
         candidates = []
         cat_cols = set()
+        numeric_cols = set()
         role_by_column: dict[str, str] = {}
         if profiling and profiling.success:
             cat_cols = set(profiling.outputs.get("categorical_column_names", []))
+            numeric_cols = set(profiling.outputs.get("numeric_column_names", []))
             role_by_column = {
                 str(name): str(profile.get("role_guess", "unknown"))
                 for name, profile in profiling.outputs.get("column_profiles", {}).items()
@@ -381,26 +437,39 @@ class SupervisedStage(BaseStage):
                 continue
             nunique = series.nunique()
             name_lower = str(col).lower().strip("_")
+            name_tokens = set(name_lower.replace("-", "_").split("_"))
             role_guess = role_by_column.get(str(col), "unknown")
             if role_guess in {"id_like", "time_like"}:
                 continue
 
+            # Classification candidates
             is_keyword = any(kw in name_lower for kw in _TARGET_KEYWORDS)
             is_low_card_cat = col in cat_cols and 2 <= nunique <= 20
             is_binary_numeric = nunique == 2
             if is_keyword or is_low_card_cat or is_binary_numeric:
                 task = "classification" if nunique <= 20 else "regression"
                 candidates.append({"name": str(col), "task_type": task, "n_classes": int(nunique)})
+                continue
+
+            # Regression candidates: continuous numeric columns whose name
+            # suggests an outcome variable
+            if col in numeric_cols and nunique > 20:
+                is_regression_keyword = bool(name_tokens & _REGRESSION_KEYWORDS)
+                if is_regression_keyword:
+                    candidates.append({"name": str(col), "task_type": "regression", "n_classes": int(nunique)})
+
         return candidates[:5]
 
     def _build_models(self, is_clf: bool, is_fast: bool, n_rows: int):
         models = []
         if is_clf:
+            models.append(("Baseline", DummyClassifier(strategy="most_frequent", random_state=42)))
             models.append(("LogisticRegression", LogisticRegression(max_iter=500, solver="lbfgs", C=1.0, random_state=42)))
             models.append(("RandomForest", RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1)))
             if not (is_fast and n_rows > 5000):
                 models.append(("SVM_RBF", SVC(kernel="rbf", random_state=42, probability=True)))
         else:
+            models.append(("Baseline", DummyRegressor(strategy="mean")))
             models.append(("Ridge", Ridge(alpha=1.0)))
             models.append(("RandomForest", RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=1)))
             if not (is_fast and n_rows > 5000):
@@ -428,6 +497,7 @@ class SupervisedStage(BaseStage):
         valid_idx: pd.Index,
         track_outputs: dict[str, dict[str, object]],
         is_classification: bool,
+        profiling=None,
     ) -> dict[str, object]:
         best_score = max(track["best"]["mean"] for track in track_outputs.values())
         sample_idx = valid_idx
@@ -453,6 +523,11 @@ class SupervisedStage(BaseStage):
                 exact_copy_columns.append(str(col))
                 continue
             if aligned["feature"].nunique() <= 2000:
+                # Check feature->target direction: does each feature value
+                # predict exactly one target value?  This catches derived
+                # columns and lookup-table proxies.  The reverse direction
+                # (target->feature) is not checked because many-to-one
+                # mappings are normal for categorical targets.
                 mapping = aligned.groupby("feature")["target"].nunique()
                 if not mapping.empty and float((mapping <= 1).mean()) >= 0.995:
                     deterministic_proxy_columns.append(str(col))
@@ -470,6 +545,20 @@ class SupervisedStage(BaseStage):
             shared_tokens = target_name_tokens & column_tokens
             if shared_tokens and len(shared_tokens) >= max(1, min(2, len(target_name_tokens))):
                 suspicious_name_columns.append(str(col))
+
+        # Check for temporal features used as predictors
+        datetime_cols = set()
+        if profiling and profiling.success:
+            datetime_cols = set(profiling.outputs.get("datetime_column_names", []))
+            role_by_col = {
+                str(name): str(profile.get("role_guess", "unknown"))
+                for name, profile in profiling.outputs.get("column_profiles", {}).items()
+            }
+            datetime_cols |= {col for col, role in role_by_col.items() if role == "time_like"}
+        temporal_feature_columns = [
+            str(col) for col in raw_df.columns
+            if str(col) in datetime_cols and str(col) != target_name
+        ]
 
         single_feature_leakage_columns: list[str] = []
         if is_classification and best_score > 0.0:
@@ -493,10 +582,25 @@ class SupervisedStage(BaseStage):
             trust_flags.append("suspicious_feature_name")
         if is_classification and best_score >= 0.95:
             trust_flags.append("near_perfect_score")
+        if not is_classification and best_score >= 0.99:
+            trust_flags.append("near_perfect_score")
         if best_score >= 0.9 and (exact_copy_columns or deterministic_proxy_columns or high_corr_proxy_columns):
             trust_flags.append("possible_leakage")
+        if temporal_feature_columns:
+            trust_flags.append("temporal_feature_present")
         if "track_b" in track_outputs and track_outputs["track_b"]["best"]["mean"] > track_outputs.get("track_a", {"best": {"mean": -np.inf}})["best"]["mean"]:
             trust_flags.append("latent_representation_helped")
+
+        # Class imbalance detection
+        imbalance_ratio = None
+        if is_classification:
+            counts = target_sample.value_counts()
+            if len(counts) >= 2:
+                imbalance_ratio = round(float(counts.iloc[0] / counts.iloc[-1]), 2)
+                if imbalance_ratio >= 10:
+                    trust_flags.append("severe_class_imbalance")
+                elif imbalance_ratio >= 5:
+                    trust_flags.append("class_imbalance")
 
         return {
             "trust_flags": sorted(set(trust_flags)),
@@ -506,6 +610,8 @@ class SupervisedStage(BaseStage):
             "deterministic_proxy_columns": sorted(set(deterministic_proxy_columns))[:5],
             "high_corr_proxy_columns": sorted(set(high_corr_proxy_columns))[:5],
             "suspicious_name_columns": sorted(set(suspicious_name_columns))[:5],
+            "temporal_feature_columns": temporal_feature_columns[:5],
+            "imbalance_ratio": imbalance_ratio,
         }
 
     def _single_feature_leakage_check(
@@ -576,6 +682,30 @@ class SupervisedStage(BaseStage):
             ),
         }
 
+    def _permutation_importance(self, estimator, X, y, is_clf: bool, col_names: list[str]) -> list[dict]:
+        """Model-agnostic permutation importance on the best model."""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fitted = clone(estimator).fit(X, y)
+                scoring = "f1_macro" if is_clf else "r2"
+                result = permutation_importance(
+                    fitted, X, y, n_repeats=5, random_state=42,
+                    scoring=scoring, n_jobs=1,
+                )
+            importances = result.importances_mean
+            indices = np.argsort(importances)[::-1][:10]
+            return [
+                {
+                    "feature": col_names[i] if i < len(col_names) else f"feature_{i}",
+                    "importance": round(float(importances[i]), 4),
+                    "std": round(float(result.importances_std[i]), 4),
+                }
+                for i in indices if importances[i] > 0
+            ]
+        except Exception:
+            return []
+
     def _rf_importance(self, X, y, is_clf: bool, col_names: list[str]) -> list[dict]:
         try:
             rf = (RandomForestClassifier if is_clf else RandomForestRegressor)(n_estimators=50, random_state=42, n_jobs=1)
@@ -618,13 +748,17 @@ class SupervisedStage(BaseStage):
             },
         )
 
+    _TRACK_LABELS = {"track_a": "PCA features", "track_b": "DVAE latent features"}
+
     def _comparison_interp(self, best_models) -> str:
         if not best_models:
             return "No models were successfully trained."
         parts = []
         for target, info in best_models.items():
+            track = info.get("track", "track_a")
+            track_label = self._TRACK_LABELS.get(track, track)
             parts.append(
-                f"Target '{target}': best overall result came from {info.get('track', 'track_a')} using "
+                f"Target '{target}': best overall result came from {track_label} using "
                 f"{info.get('model', '?')} ({info.get('metric', '?')}={info.get('mean', 0):.2f} +/- {info.get('std', 0):.2f})."
             )
         return " ".join(parts)
@@ -643,8 +777,24 @@ class SupervisedStage(BaseStage):
 
     def _track_comparison_interp(self, track_comparison) -> str:
         if not track_comparison:
-            return "No Track A vs Track B comparison is available."
-        return " ".join(str(item.get("summary", "")) for item in track_comparison.values())
+            return (
+                "No PCA vs DVAE comparison is available. "
+                "The DVAE autoencoder provides a nonlinear alternative to PCA for feature compression; "
+                "when both are available, Explot compares model performance on each representation."
+            )
+        parts = []
+        for target, item in track_comparison.items():
+            if not item.get("available"):
+                parts.append(str(item.get("summary", "")))
+                continue
+            winner = item.get("winner", "track_a")
+            winner_label = self._TRACK_LABELS.get(winner, winner)
+            delta = item.get("delta", 0)
+            parts.append(
+                f"Target '{target}': {winner_label} won by {abs(delta):+.4f}. "
+                f"{'The DVAE latent space captured nonlinear structure that PCA missed.' if winner == 'track_b' else 'PCA features were sufficient — the data structure is mostly linear.'}"
+            )
+        return " ".join(parts)
 
     def _trust_notes(self, best_models) -> str:
         if not best_models:
@@ -664,7 +814,7 @@ class SupervisedStage(BaseStage):
             if exact:
                 parts.append(f"Target '{target}' has exact-copy feature(s) ({', '.join(exact[:3])}), which is a strong leakage warning.")
             elif deterministic:
-                parts.append(f"Target '{target}' has near-deterministic proxy feature(s) ({', '.join(deterministic[:3])}), so high scores should be treated cautiously.")
+                parts.append(f"Target '{target}' has near-deterministic proxy feature(s) ({', '.join(deterministic[:3])}) where each feature value maps to a single target value, so high scores should be treated cautiously.")
             elif corr_like:
                 parts.append(f"Target '{target}' has feature(s) with near-perfect numeric correlation ({', '.join(corr_like[:3])}), which can indicate proxy leakage.")
             elif "near_perfect_score" in flags:
@@ -675,6 +825,13 @@ class SupervisedStage(BaseStage):
                 parts.append(f"Target '{target}' has proxy-like columns ({', '.join(proxies[:3])}), so high scores should be interpreted cautiously.")
             else:
                 parts.append(f"Target '{target}' does not show obvious proxy flags under the current heuristics.")
+            imbalance = diagnostics.get("imbalance_ratio")
+            if imbalance and imbalance >= 5:
+                severity = "severely" if imbalance >= 10 else "moderately"
+                parts.append(
+                    f"Target '{target}' is {severity} imbalanced (majority:minority ratio {imbalance:.0f}:1). "
+                    "Consider stratified sampling or resampling techniques before production use."
+                )
         return " ".join(parts)
 
     def _recommendation_interp(self, best_models, intrinsic_dim, silhouette) -> str:
@@ -686,7 +843,13 @@ class SupervisedStage(BaseStage):
             score = info["mean"]
             metric = info["metric"]
             flags = info.get("trust_flags", [])
-            parts.append(f"For target '{target}', {model} on {info.get('track', 'track_a')} achieved the best {metric} of {score:.2f}.")
+            track = info.get("track", "track_a")
+            track_label = self._TRACK_LABELS.get(track, track)
+            parts.append(f"For target '{target}', {model} on {track_label} achieved the best {metric} of {score:.2f}.")
+            lift = info.get("lift_over_baseline")
+            baseline_score = info.get("baseline_score")
+            if lift is not None and baseline_score is not None:
+                parts.append(f"Baseline score: {baseline_score:.2f}, lift: {lift:+.2f}.")
             if "Forest" in model or "XGBoost" in model or "LightGBM" in model:
                 parts.append("Tree-based models excel here, suggesting nonlinear feature interactions or heterogeneous subgroups in the data.")
             elif "Logistic" in model or "Ridge" in model:
@@ -698,12 +861,14 @@ class SupervisedStage(BaseStage):
                 parts.append(f"The data has low intrinsic dimensionality ({intrinsic_dim}), which generally favors simpler models.")
             if silhouette is not None and silhouette > 0.5:
                 parts.append(f"Strong cluster structure (silhouette={silhouette:.2f}) suggests the target may align with natural groupings.")
-            if score > 0.8:
-                parts.append("This is a strong result - the target is well-predictable.")
+            if metric == "R2" and score <= 0.0:
+                parts.append("The model does not explain any variance — the target may be noise or require different features entirely.")
+            elif score > 0.8:
+                parts.append("This is a strong result — the target is well-predictable.")
             elif score > 0.5:
-                parts.append("Moderate predictability - further feature engineering may help.")
+                parts.append("Moderate predictability — further feature engineering may help.")
             else:
-                parts.append("Weak predictability - the target may not be well-explained by these features, or the sample size may be too small.")
+                parts.append("Weak predictability — the target may not be well-explained by these features, or the sample size may be too small.")
             if any(flag in flags for flag in ("proxy_like_feature", "near_perfect_score", "possible_leakage", "exact_copy_feature", "high_correlation_proxy")):
                 parts.append("Trust note: this target shows proxy/leakage-like patterns under the current heuristics.")
         return " ".join(parts)

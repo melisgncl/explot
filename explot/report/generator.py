@@ -544,6 +544,12 @@ class ReportGenerator:
             "<h3>Numeric Shift Across A Low-Cardinality Group</h3>"
             f"<div class='figure'>{figures.get('grouped_distributions', '<p class=\"muted\">No grouped distribution plot.</p>')}</div>"
             "</div>"
+            "<div class='panel span-12'>"
+            "<div class='section-kicker'>Feature–Target</div>"
+            "<h3>Feature-Target Correlations</h3>"
+            f"<div class='callout'>{escape(exploration.interpretations.get('feature_target_correlations', 'Not available.'))}</div>"
+            f"<div class='figure' style='margin-top:12px'>{figures.get('feature_target_correlations', '<p class=\"muted\">No feature-target correlation chart.</p>')}</div>"
+            "</div>"
             "</div>"
         )
 
@@ -732,18 +738,28 @@ class ReportGenerator:
             results_a = model_results_a.get(target, [])
             results_b = model_results_b.get(target, [])
             best = best_models.get(target, {})
+            is_regression = best.get("metric", "") == "R2"
+            if is_regression:
+                table_header = "<th>Model</th><th>R2</th>"
+                def _model_row(r):
+                    return f"<tr><td>{escape(r['model'])}</td><td>{r['mean']:.4f} +/- {r['std']:.4f}</td></tr>"
+                empty_colspan = 2
+            else:
+                table_header = "<th>Model</th><th>F1 (macro)</th><th>Precision</th><th>Recall</th><th>Accuracy</th><th>ROC AUC</th>"
+                def _model_row(r):
+                    return (
+                        f"<tr><td>{escape(r['model'])}</td><td>{r['mean']:.4f} +/- {r['std']:.4f}</td>"
+                        f"<td>{r.get('precision_macro', 'n/a')}</td><td>{r.get('recall_macro', 'n/a')}</td>"
+                        f"<td>{r.get('accuracy', 'n/a')}</td><td>{r.get('roc_auc', 'n/a')}</td></tr>"
+                    )
+                empty_colspan = 6
+
             rows_a = "".join(
-                f"<tr><td>{escape(r['model'])}</td><td>{r['mean']:.4f} +/- {r['std']:.4f}</td>"
-                f"<td>{r.get('precision_macro', 'n/a')}</td><td>{r.get('recall_macro', 'n/a')}</td>"
-                f"<td>{r.get('accuracy', 'n/a')}</td><td>{r.get('roc_auc', 'n/a')}</td></tr>"
-                for r in sorted(results_a, key=lambda x: -x["mean"])
-            ) or "<tr><td colspan='6'>Track A unavailable.</td></tr>"
+                _model_row(r) for r in sorted(results_a, key=lambda x: -x["mean"])
+            ) or f"<tr><td colspan='{empty_colspan}'>Track A unavailable.</td></tr>"
             rows_b = "".join(
-                f"<tr><td>{escape(r['model'])}</td><td>{r['mean']:.4f} +/- {r['std']:.4f}</td>"
-                f"<td>{r.get('precision_macro', 'n/a')}</td><td>{r.get('recall_macro', 'n/a')}</td>"
-                f"<td>{r.get('accuracy', 'n/a')}</td><td>{r.get('roc_auc', 'n/a')}</td></tr>"
-                for r in sorted(results_b, key=lambda x: -x["mean"])
-            ) or "<tr><td colspan='6'>Track B unavailable.</td></tr>"
+                _model_row(r) for r in sorted(results_b, key=lambda x: -x["mean"])
+            ) or f"<tr><td colspan='{empty_colspan}'>Track B unavailable.</td></tr>"
 
             fi_rows = ""
             for track_name, feats in feature_importances.get(target, {}).items():
@@ -753,6 +769,24 @@ class ReportGenerator:
                 )
             fi_rows = fi_rows or "<tr><td colspan='3'>No feature importance data.</td></tr>"
 
+            # Permutation importance
+            perm_imp = best.get("permutation_importance", [])
+            perm_rows = "".join(
+                f"<tr><td>{escape(p['feature'])}</td><td>{p['importance']:.4f}</td><td>+/- {p.get('std', 0):.4f}</td></tr>"
+                for p in perm_imp[:10]
+            ) or "<tr><td colspan='3'>Not available.</td></tr>"
+
+            # Baseline lift
+            lift = best.get("lift_over_baseline")
+            baseline_score = best.get("baseline_score")
+            lift_text = ""
+            if lift is not None and baseline_score is not None:
+                lift_text = (
+                    f"<div class='callout' style='margin-top:12px'>"
+                    f"<strong>Baseline:</strong> {baseline_score:.4f} | "
+                    f"<strong>Lift over baseline:</strong> {lift:+.4f}</div>"
+                )
+
             cmp = track_comparison.get(target, {})
             cmp_text = cmp.get("summary", "No track comparison available.")
             best_track = best.get("track", "track_a")
@@ -761,28 +795,44 @@ class ReportGenerator:
             matrix = evaluation_details.get(target, {}).get(best_track, {}).get("confusion_matrix", [])
             cm_html = self._confusion_table(labels, matrix)
 
+            if is_regression:
+                metrics_html = (
+                    f"<div class='callout' style='margin-top:12px'><strong>Best-model metrics:</strong> "
+                    f"R2 {metrics.get('r2', 'n/a')}, MAE {metrics.get('mae', 'n/a')}, RMSE {metrics.get('rmse', 'n/a')}.</div>"
+                )
+                cm_section = ""
+            else:
+                metrics_html = (
+                    f"<div class='callout' style='margin-top:12px'><strong>Best-model metrics:</strong> "
+                    f"precision {metrics.get('precision_macro', 'n/a')}, recall {metrics.get('recall_macro', 'n/a')}, "
+                    f"F1 {metrics.get('f1_macro', best.get('mean', 'n/a'))}, accuracy {metrics.get('accuracy', 'n/a')}, "
+                    f"ROC AUC {metrics.get('roc_auc', 'n/a')}.</div>"
+                )
+                cm_section = f"<div style='margin-top:12px'>{cm_html}</div>"
+
             targets_html += (
                 f"<div class='panel span-6'>"
                 f"<div class='section-kicker'>Target: {escape(target)}</div>"
-                f"<h3>Track A: Original Features</h3>"
-                f"<div class='table-wrap'><table><thead><tr><th>Model</th><th>F1/R2</th><th>Precision</th><th>Recall</th><th>Accuracy</th><th>ROC AUC</th></tr></thead><tbody>"
+                f"<h3>Track A: PCA Features</h3>"
+                f"<div class='table-wrap'><table><thead><tr>{table_header}</tr></thead><tbody>"
                 f"{rows_a}</tbody></table></div>"
-                f"<h3 style='margin-top:16px'>Track B: Latent Features</h3>"
-                f"<div class='table-wrap'><table><thead><tr><th>Model</th><th>F1/R2</th><th>Precision</th><th>Recall</th><th>Accuracy</th><th>ROC AUC</th></tr></thead><tbody>"
+                f"<h3 style='margin-top:16px'>Track B: DVAE Latent Features</h3>"
+                f"<div class='table-wrap'><table><thead><tr>{table_header}</tr></thead><tbody>"
                 f"{rows_b}</tbody></table></div>"
                 f"</div>"
                 f"<div class='panel span-6'>"
                 f"<div class='section-kicker'>Trust And Diagnostics</div>"
-                f"<h3>Best Track: {escape(best_track)}</h3>"
+                f"<h3>Best Track: {'PCA Features' if best_track == 'track_a' else 'DVAE Latent Features'}</h3>"
                 f"<div class='callout'><strong>Track comparison:</strong> {escape(cmp_text)}</div>"
-                f"<div class='callout' style='margin-top:12px'><strong>Best-model metrics:</strong> "
-                f"precision {metrics.get('precision_macro', 'n/a')}, recall {metrics.get('recall_macro', 'n/a')}, "
-                f"F1 {metrics.get('f1_macro', best.get('mean', 'n/a'))}, accuracy {metrics.get('accuracy', 'n/a')}, "
-                f"ROC AUC {metrics.get('roc_auc', 'n/a')}.</div>"
-                f"<div style='margin-top:12px'>{cm_html}</div>"
-                f"<h3 style='margin-top:16px'>Feature Importance</h3>"
+                f"{lift_text}"
+                f"{metrics_html}"
+                f"{cm_section}"
+                f"<h3 style='margin-top:16px'>Feature Importance (RF Impurity)</h3>"
                 f"<div class='table-wrap'><table><thead><tr><th>Track</th><th>Feature</th><th>Importance</th></tr></thead><tbody>"
                 f"{fi_rows}</tbody></table></div>"
+                f"<h3 style='margin-top:16px'>Permutation Importance (Best Model)</h3>"
+                f"<div class='table-wrap'><table><thead><tr><th>Feature</th><th>Importance</th><th>Std</th></tr></thead><tbody>"
+                f"{perm_rows}</tbody></table></div>"
                 f"</div>"
             )
 

@@ -14,8 +14,8 @@ def test_report_renders_supervised_track_comparison_and_confusion(workspace_tmp_
     assert state.results["supervised"].success is True
     html = report_path.read_text(encoding="utf-8")
     assert "DVAE" in html
-    assert "Track A: Original Features" in html
-    assert "Track B: Latent Features" in html
+    assert "Track A: PCA Features" in html
+    assert "Track B: DVAE Latent Features" in html
     assert "True \\ Pred" in html
     assert "Top Numeric Feature Distributions" in html
     assert "Isolation Forest vs DVAE vs Stage 2" in html

@@ -2,7 +2,7 @@
 
 Automated first-pass analyst for tabular data — one CSV in, one trust-aware report out.
 
-Most profiling tools stop at column summaries. Explot goes further: it profiles your data, checks for structure, runs unsupervised and supervised probes, **recommends which ML model fits**, and flags potential leakage — all in a single command.
+Most profiling tools stop at column summaries. Explot goes further: it profiles your data, checks for structure, runs unsupervised and supervised probes (both classification and regression), **recommends which ML model fits**, and flags potential leakage — all in a single command.
 
 ## Quick Start
 
@@ -75,10 +75,10 @@ Explot runs 7 stages, each building on the last:
 | **Profiling** | Column types, missing values, suspicious columns, quality score (0-100) |
 | **Exploration** | Redundant feature pairs, cluster tendency (Hopkins), missingness patterns, outliers |
 | **Dimensionality** | PCA variance decomposition, intrinsic dimensionality estimate, scree plot |
-| **DVAE** | Nonlinear compression via denoising VAE, reconstruction error, latent space view |
-| **Unsupervised** | KMeans sweep, DBSCAN auto-tuning, Isolation Forest anomaly detection |
-| **Model Selection** | Auto-detects targets, runs cross-validated probes, compares models, recommends the best |
-| **Findings** | Cross-stage synthesis with confidence levels and suggested next steps |
+| **DVAE** | Nonlinear compression via denoising VAE — compared against PCA to measure nonlinear structure |
+| **Unsupervised** | KMeans sweep, DBSCAN auto-tuning, Isolation Forest anomaly detection, multi-signal consensus |
+| **Model Selection** | Auto-detects classification and regression targets, runs cross-validated probes on PCA and DVAE features, recommends the best model |
+| **Findings** | Cross-stage synthesis with confidence levels, class imbalance warnings, and suggested next steps |
 
 The output is a self-contained HTML file with tabbed navigation — no CDN dependencies, opens in any browser.
 
@@ -90,10 +90,12 @@ The model selection stage doesn't just report scores — it warns you when score
 |------|--------------|
 | `single_feature_leakage` | One feature alone predicts the target nearly as well as the full model |
 | `exact_copy_feature` | A feature is an exact copy of the target column |
-| `proxy_like_feature` | A feature deterministically maps to the target (1-to-1) |
+| `proxy_like_feature` | A feature deterministically maps to the target (feature→target direction) |
 | `high_correlation_proxy` | A feature has |r| > 0.995 with the target |
-| `near_perfect_score` | F1 > 0.95 — investigate before celebrating |
+| `near_perfect_score` | F1 > 0.95 (classification) or R2 > 0.99 (regression) — investigate before celebrating |
 | `suspicious_feature_name` | Feature name shares tokens with target name |
+| `severe_class_imbalance` | Target class ratio exceeds 10:1 — metrics may be misleading |
+| `class_imbalance` | Target class ratio exceeds 5:1 |
 
 ## How to Read the Results
 
@@ -106,7 +108,7 @@ The model selection stage doesn't just report scores — it warns you when score
 - **Profiling** — verify suspicious columns were caught (especially ID columns)
 - **Exploration** — redundant pairs tell you what to drop; Hopkins < 0.5 means clustering won't help
 - **Dimensionality** — intrinsic dim estimate reveals how many features actually matter
-- **Model Selection** — Track A (PCA features) vs Track B (DVAE latent) comparison shows whether nonlinear structure exists
+- **Model Selection** — PCA features vs DVAE latent features comparison shows whether nonlinear structure exists; check class imbalance warnings for skewed targets
 
 ## Example Output
 
@@ -180,7 +182,7 @@ explot/
   report/
     generator.py      # HTML report builder
 simulator/            # Synthetic data generators for testing
-tests/                # 58+ tests against planted ground truth
+tests/                # 60+ tests against planted ground truth
 ```
 
 ## What This Is Not

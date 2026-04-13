@@ -152,12 +152,26 @@ class UnsupervisedStage(BaseStage):
             distances, _ = nn.kneighbors(X)
             sorted_dists = np.sort(distances[:, -1])
 
-            # Elbow detection: max second derivative
+            # Elbow detection: max second derivative with smoothing
             if len(sorted_dists) > 4:
-                diffs = np.diff(sorted_dists)
-                diffs2 = np.diff(diffs)
-                elbow_idx = int(np.argmax(diffs2)) + 2
-                eps = float(sorted_dists[min(elbow_idx, len(sorted_dists) - 1)])
+                # Smooth k-distances to reduce noise sensitivity
+                window = max(3, len(sorted_dists) // 50)
+                if window % 2 == 0:
+                    window += 1
+                kernel = np.ones(window) / window
+                smoothed = np.convolve(sorted_dists, kernel, mode="valid")
+                if len(smoothed) > 4:
+                    diffs = np.diff(smoothed)
+                    diffs2 = np.diff(diffs)
+                    elbow_idx = int(np.argmax(diffs2)) + 2 + (window // 2)
+                    elbow_idx = min(elbow_idx, len(sorted_dists) - 1)
+                    eps = float(sorted_dists[elbow_idx])
+                else:
+                    eps = float(np.percentile(sorted_dists, 90))
+                # Fallback: if elbow picked a very small eps, use percentile
+                percentile_eps = float(np.percentile(sorted_dists, 90))
+                if eps < percentile_eps * 0.1:
+                    eps = percentile_eps
             else:
                 eps = float(np.median(sorted_dists))
 
