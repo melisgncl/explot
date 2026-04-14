@@ -7,19 +7,30 @@ class FindingsStage(BaseStage):
     meta = StageMeta(
         name="findings",
         depends_on=("profiling",),
-        optional_deps=("exploration", "dimensionality", "autoencoder", "unsupervised", "supervised"),
+        optional_deps=("exploration", "preprocessing", "dimensionality", "autoencoder", "unsupervised", "supervised"),
     )
+    _HARD_STOP_FLAGS = frozenset({
+        "group_leakage", "temporal_leakage", "exact_copy_feature",
+        "proxy_like_feature", "single_feature_leakage",
+    })
+    _SOFT_FLAGS = frozenset({
+        "high_correlation_proxy", "near_perfect_score",
+        "suspicious_feature_name", "severe_class_imbalance",
+        "possible_leakage",
+    })
 
     def run(self, state, config, hooks) -> StageResult:
         findings: list[dict] = []
         hooks.progress(self.meta.name, 10, "Collecting findings from all stages.")
 
         findings.extend(self._profiling_findings(state))
+        findings.extend(self._preprocessing_findings(state))
         findings.extend(self._exploration_findings(state))
         findings.extend(self._dimensionality_findings(state))
         findings.extend(self._autoencoder_findings(state))
         findings.extend(self._unsupervised_findings(state))
         findings.extend(self._supervised_findings(state))
+        findings.extend(self._survival_findings(state))
 
         # Sort: HIGH first, then MEDIUM, then LOW
         order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -27,6 +38,7 @@ class FindingsStage(BaseStage):
 
         summary_card = [f["text"] for f in findings[:3]]
         next_steps = self._suggest_next_steps(state, findings)
+        verdict = self._verdict(state, config)
 
         hooks.progress(self.meta.name, 90, "Done.")
 
@@ -37,9 +49,11 @@ class FindingsStage(BaseStage):
                 "findings_list": findings,
                 "summary_card": summary_card,
                 "suggested_next_steps": next_steps,
+                "verdict": verdict,
             },
             interpretations={
                 "summary": self._summary_interp(findings, summary_card),
+                "verdict": verdict["headline"],
             },
         )
 
@@ -90,6 +104,47 @@ class FindingsStage(BaseStage):
                     s["details"],
                     "HIGH", "profiling", "high_dimensional"))
                 break
+        return findings
+
+    def _preprocessing_findings(self, state) -> list[dict]:
+        findings = []
+        preprocessing = state.results.get("preprocessing")
+        if not (preprocessing and preprocessing.success):
+            return findings
+
+        imputation_stats = preprocessing.outputs.get("imputation_stats", {})
+        heavy_cols = preprocessing.outputs.get("columns_with_heavy_imputation", [])
+        dropped_cols = preprocessing.outputs.get("dropped_columns", [])
+
+        for col in heavy_cols:
+            stats = imputation_stats.get(col, {})
+            pct = stats.get("pct_filled", "?")
+            method = stats.get("method", "median")
+            findings.append(self._f(
+                f"Column '{col}' had {pct}% missing values — imputed with {method}. "
+                "Consider whether missingness is informative (a missing value may itself be a signal).",
+                "HIGH", "preprocessing", "heavy_imputation",
+            ))
+
+        hc_drops = [d for d in dropped_cols if d["reason"] == "high_cardinality"]
+        for drop in hc_drops:
+            findings.append(self._f(
+                f"Column '{drop['name']}' was dropped: {drop['n_unique']} unique string values "
+                "exceed the encoding threshold. Consider target encoding or text embeddings.",
+                "HIGH", "preprocessing", "high_cardinality_dropped",
+            ))
+
+        freq_encoded = preprocessing.outputs.get("frequency_encoded", [])
+        if freq_encoded:
+            names = ", ".join(f"'{c}'" for c in freq_encoded[:5])
+            more = f" (+{len(freq_encoded) - 5} more)" if len(freq_encoded) > 5 else ""
+            findings.append(self._f(
+                f"{len(freq_encoded)} medium-cardinality column(s) frequency-encoded: {names}{more}. "
+                "Frequency encoding preserves prevalence but loses category identity — "
+                "consider ordinal or target encoding if category identity matters.",
+                "MEDIUM", "preprocessing", "frequency_encoded",
+            ))
+
         return findings
 
     def _exploration_findings(self, state) -> list[dict]:
@@ -236,6 +291,33 @@ class FindingsStage(BaseStage):
                 findings.append(self._f(
                     f"Target '{target}' has temporal features in the dataset — check for temporal leakage.",
                     "MEDIUM", "supervised", "temporal_leakage"))
+            diag = info.get("diagnostics", {}) or {}
+            if diag.get("used_balanced_weights"):
+                ratio = diag.get("imbalance_ratio")
+                ratio_str = f" ({ratio:.1f}:1 ratio)" if ratio is not None else ""
+                findings.append(self._f(
+                    f"Target '{target}': class imbalance detected{ratio_str} — models retrained with balanced class weights.",
+                    "MEDIUM", "supervised", "balanced_class_weights"))
+            group_audit = diag.get("group_audit", {}) or {}
+            if group_audit.get("leakage_detected"):
+                findings.append(self._f(
+                    f"Target '{target}': group leakage detected on id-like column "
+                    f"'{group_audit.get('id_column')}'. "
+                    f"KFold score {group_audit.get('kfold_score'):.2f} drops to "
+                    f"{group_audit.get('group_score'):.2f} under GroupKFold "
+                    f"(delta {group_audit.get('delta'):+.2f}). "
+                    "Random folds are leaking the same entities into train and test.",
+                    "HIGH", "supervised", "group_leakage"))
+            temporal_audit = diag.get("temporal_audit", {}) or {}
+            if temporal_audit.get("leakage_detected"):
+                findings.append(self._f(
+                    f"Target '{target}': temporal leakage detected on time column "
+                    f"'{temporal_audit.get('time_column')}'. "
+                    f"KFold score {temporal_audit.get('kfold_score'):.2f} drops to "
+                    f"{temporal_audit.get('time_score'):.2f} under TimeSeriesSplit "
+                    f"(delta {temporal_audit.get('delta'):+.2f}). "
+                    "Random folds are using the future to predict the past.",
+                    "HIGH", "supervised", "temporal_leakage_empirical"))
             lift = info.get("lift_over_baseline")
             baseline_score = info.get("baseline_score")
             if lift is not None and baseline_score is not None:
@@ -248,6 +330,76 @@ class FindingsStage(BaseStage):
                     findings.append(self._f(
                         f"Target '{target}': strong lift over baseline ({lift:+.4f}), confirming genuine predictive signal.",
                         "MEDIUM", "supervised", "baseline_lift"))
+        return findings
+
+    def _survival_findings(self, state) -> list[dict]:
+        findings = []
+        survival = state.results.get("survival")
+        if not (survival and survival.success):
+            return findings
+        if not survival.outputs.get("detected"):
+            return findings
+
+        n_total = survival.outputs.get("n_total", 0)
+        n_events = survival.outputs.get("n_events", 0)
+        event_rate = survival.outputs.get("event_rate", 0)
+        median = survival.outputs.get("median_survival")
+        concordance = survival.outputs.get("cox_concordance")
+        time_col = survival.outputs.get("time_column", "?")
+        event_col = survival.outputs.get("event_column", "?")
+        strat_col = survival.outputs.get("stratify_column")
+
+        findings.append(self._f(
+            f"Survival analysis detected: {n_events} events in {n_total:,} observations "
+            f"({100 * event_rate:.1f}% event rate) on '{time_col}' / '{event_col}'.",
+            "HIGH", "survival", "survival_detected",
+        ))
+
+        if median is not None:
+            findings.append(self._f(
+                f"Median survival time: {median:.1f} (unit: '{time_col}').",
+                "MEDIUM", "survival", "median_survival",
+            ))
+
+        if concordance is not None:
+            if concordance >= 0.70:
+                conf, label = "HIGH", "good"
+            elif concordance >= 0.60:
+                conf, label = "MEDIUM", "moderate"
+            else:
+                conf, label = "LOW", "weak"
+            findings.append(self._f(
+                f"Cox PH model C-index: {concordance:.3f} ({label} discrimination). "
+                "C-index > 0.70 suggests the covariates meaningfully predict survival.",
+                conf, "survival", "cox_concordance",
+            ))
+
+        if event_rate < 0.10:
+            findings.append(self._f(
+                f"Low event rate ({100 * event_rate:.1f}%) — Cox model may be underpowered. "
+                "Rule of thumb: ≥10 events per covariate for reliable estimates.",
+                "HIGH", "survival", "low_event_rate",
+            ))
+
+        if strat_col:
+            findings.append(self._f(
+                f"Significant survival difference by '{strat_col}' (log-rank p < 0.20) — "
+                "see KM stratified curve.",
+                "MEDIUM", "survival", "stratified_km",
+            ))
+
+        # Top significant Cox covariates
+        cox = survival.outputs.get("cox_summary", []) or []
+        sig = [c for c in cox if c.get("significant")]
+        if sig:
+            top = sig[0]
+            direction = "increases" if top["coef"] > 0 else "decreases"
+            findings.append(self._f(
+                f"Top Cox covariate: '{top['covariate']}' (HR={top['exp_coef']:.2f}, p={top['p']:.3f}) — "
+                f"higher values {direction} hazard.",
+                "HIGH", "survival", "cox_top_covariate",
+            ))
+
         return findings
 
     def _suggest_next_steps(self, state, findings) -> list[str]:
@@ -280,6 +432,93 @@ class FindingsStage(BaseStage):
         if not steps:
             steps.append("Review the full report for detailed per-stage analysis.")
         return steps
+
+    def _verdict(self, state, config=None) -> dict:
+        """Synthesize trust flags into a SHIP / INVESTIGATE / DO_NOT_SHIP decision."""
+        best_models = self._get(state, "supervised", "best_models", {}) or {}
+        verdict_lift_floor = float(getattr(getattr(config, "budget", None), "verdict_lift_floor", 0.05))
+        reasons: list[str] = []
+
+        if not best_models:
+            return {
+                "decision": "NO_MODEL",
+                "headline": "No supervised target evaluated — verdict unavailable.",
+                "reasons": [],
+            }
+
+        worst_decision = "SHIP"
+        for target, info in best_models.items():
+            flags = set(info.get("trust_flags", []) or [])
+            score = float(info.get("mean", 0.0))
+            lift = info.get("lift_over_baseline")
+            baseline_score = info.get("baseline_score")
+            hard_hits = flags & self._HARD_STOP_FLAGS
+            soft_hits = flags & self._SOFT_FLAGS
+
+            if hard_hits:
+                worst_decision = "DO_NOT_SHIP"
+                reasons.append(
+                    f"Target '{target}': hard-stop trust flag(s) — {', '.join(sorted(hard_hits))}."
+                )
+            elif soft_hits:
+                if worst_decision != "DO_NOT_SHIP":
+                    worst_decision = "INVESTIGATE"
+                reasons.append(
+                    f"Target '{target}': review flag(s) — {', '.join(sorted(soft_hits))}."
+                )
+
+            # Low absolute lift: model barely beats a coin flip
+            if lift is not None and float(lift) < verdict_lift_floor and score > 0:
+                if worst_decision == "SHIP":
+                    worst_decision = "INVESTIGATE"
+                reasons.append(
+                    f"Target '{target}': lift over dummy baseline is only {lift:+.3f} — model may not be learning."
+                )
+
+            # Performance floor: model score within 0.03 of dummy baseline
+            if baseline_score is not None and score <= float(baseline_score) + 0.03:
+                if worst_decision == "SHIP":
+                    worst_decision = "INVESTIGATE"
+                reasons.append(
+                    f"Target '{target}': best model ({info.get('model', '?')}) scores {score:.3f} — "
+                    f"within 0.03 of dummy baseline {float(baseline_score):.3f}. "
+                    "Model may not be learning meaningful patterns."
+                )
+
+            # Severe class imbalance: F1-macro averages across classes equally, so
+            # it structurally hides minority-class failures at extreme ratios.
+            # A model with 0.99 majority F1 and 0.20 minority F1 reports 0.60 macro —
+            # which looks passable but misses almost every minority case.
+            # Force INVESTIGATE so the user reviews per-class metrics before shipping.
+            diag = info.get("diagnostics", {}) or {}
+            ratio = diag.get("imbalance_ratio")
+            if ratio is not None and float(ratio) >= 20:
+                if worst_decision == "SHIP":
+                    worst_decision = "INVESTIGATE"
+                reasons.append(
+                    f"Target '{target}': severe class imbalance ({ratio:.0f}:1) — "
+                    "F1-macro may mask poor minority-class recall. "
+                    "Review per-class precision/recall before shipping."
+                )
+
+        # Row-cap disclosure: if data was downsampled, surface it in the verdict
+        sampling_notes = self._get(state, "supervised", "sampling_notes", []) or []
+        if sampling_notes:
+            if worst_decision == "SHIP":
+                worst_decision = "INVESTIGATE"
+            for note in sampling_notes[:3]:
+                reasons.append(f"[Sampling] {note}")
+
+        headlines = {
+            "SHIP": "Ship with caution — no blocking trust flags detected.",
+            "INVESTIGATE": "Investigate before shipping — trust issues need review.",
+            "DO_NOT_SHIP": "Do not ship — one or more leakage or proxy flags fired.",
+        }
+        return {
+            "decision": worst_decision,
+            "headline": headlines[worst_decision],
+            "reasons": reasons[:10],
+        }
 
     def _summary_interp(self, findings, summary_card) -> str:
         n = len(findings)

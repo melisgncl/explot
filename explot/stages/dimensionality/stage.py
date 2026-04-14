@@ -15,69 +15,94 @@ class DimensionalityStage(BaseStage):
         profiling = state.results["profiling"]
         exploration = state.results["exploration"]
         df = state.raw_df
+        preprocessing = state.results.get("preprocessing")
 
         hooks.progress(self.meta.name, 10, "Selecting numeric columns and planning transforms.")
 
-        numeric_cols = list(profiling.outputs.get("numeric_column_names", []))
         norm_guess = profiling.outputs.get("normalization_guess", "unknown")
-        suspicious = profiling.outputs.get("suspicious_columns", [])
         redundant_pairs = exploration.outputs.get("redundant_pairs", [])
-
         transform_log: list[str] = []
         dropped_columns: list[dict[str, str]] = []
 
-        # --- Column filtering ---
-        drop_suspicious_reasons = {"id_like", "near_constant"}
-        suspicious_names = {
-            item["name"]
-            for item in suspicious
-            if item.get("reason") in drop_suspicious_reasons
-        }
-        for name in sorted(suspicious_names):
-            if name in numeric_cols:
-                numeric_cols.remove(name)
-                reason = next(
-                    (item["reason"] for item in suspicious if item["name"] == name), "suspicious"
-                )
-                dropped_columns.append({"name": name, "reason": reason})
-                transform_log.append(f"Dropped '{name}' (flagged as {reason} by profiling).")
+        # Use the preprocessed matrix (numeric + encoded categoricals) when available;
+        # fall back to numeric-only columns from raw data otherwise.
+        _use_preprocessed = (
+            preprocessing and preprocessing.success
+            and isinstance(preprocessing.outputs.get("preprocessed_df"), pd.DataFrame)
+            and not preprocessing.outputs["preprocessed_df"].empty
+        )
 
-        redundant_to_drop: set[str] = set()
-        for pair in redundant_pairs:
-            cols = pair.get("columns", [])
-            if len(cols) == 2 and cols[1] in numeric_cols and cols[1] not in redundant_to_drop:
-                redundant_to_drop.add(cols[1])
-        for name in sorted(redundant_to_drop):
-            if name in numeric_cols:
-                numeric_cols.remove(name)
-                dropped_columns.append({"name": name, "reason": "redundant"})
-                transform_log.append(
-                    f"Dropped '{name}' (redundant pair detected by exploration)."
-                )
-
-        hooks.progress(self.meta.name, 30, "Building cleaned numeric matrix.")
-
-        if not numeric_cols:
-            return self._empty_result(transform_log, dropped_columns)
-
-        cleaned = df[numeric_cols].apply(pd.to_numeric, errors="coerce").copy()
-
-        # --- Imputation ---
-        null_count = int(cleaned.isna().sum().sum())
-        if null_count > 0:
-            medians = cleaned.median()
-            cleaned = cleaned.fillna(medians)
+        if _use_preprocessed:
+            cleaned = preprocessing.outputs["preprocessed_df"].copy()
+            numeric_cols = list(cleaned.columns)
             transform_log.append(
-                f"Imputed {null_count} NaN values with column medians across "
-                f"{int((medians.index.size - (cleaned.isna().sum() == 0).sum()))} columns."
+                f"Using preprocessed matrix: {len(numeric_cols)} features "
+                "(numeric + encoded categoricals)."
             )
-            # Recount — fillna covers everything, but if a column was all-NaN
-            # the median is NaN, so fill remaining with 0.
-            if cleaned.isna().any().any():
-                cleaned = cleaned.fillna(0.0)
-                transform_log.append("Filled remaining all-NaN columns with 0.")
+            # Apply redundant-pair filtering to any original columns that survived encoding
+            redundant_to_drop: set[str] = set()
+            for pair in redundant_pairs:
+                cols = pair.get("columns", [])
+                if len(cols) == 2 and cols[1] in numeric_cols and cols[1] not in redundant_to_drop:
+                    redundant_to_drop.add(cols[1])
+            for name in sorted(redundant_to_drop):
+                numeric_cols.remove(name)
+                cleaned = cleaned.drop(columns=[name])
+                dropped_columns.append({"name": name, "reason": "redundant"})
+                transform_log.append(f"Dropped '{name}' (redundant pair).")
+            cleaned_df = cleaned.copy()
+            hooks.progress(self.meta.name, 30, "Preprocessed matrix ready.")
+        else:
+            # Legacy path: numeric columns only from raw data
+            numeric_cols = list(profiling.outputs.get("numeric_column_names", []))
+            suspicious = profiling.outputs.get("suspicious_columns", [])
 
-        cleaned_df = cleaned.copy()
+            drop_suspicious_reasons = {"id_like", "near_constant"}
+            suspicious_names = {
+                item["name"]
+                for item in suspicious
+                if item.get("reason") in drop_suspicious_reasons
+            }
+            for name in sorted(suspicious_names):
+                if name in numeric_cols:
+                    numeric_cols.remove(name)
+                    reason = next(
+                        (item["reason"] for item in suspicious if item["name"] == name), "suspicious"
+                    )
+                    dropped_columns.append({"name": name, "reason": reason})
+                    transform_log.append(f"Dropped '{name}' (flagged as {reason} by profiling).")
+
+            redundant_to_drop = set()
+            for pair in redundant_pairs:
+                cols = pair.get("columns", [])
+                if len(cols) == 2 and cols[1] in numeric_cols and cols[1] not in redundant_to_drop:
+                    redundant_to_drop.add(cols[1])
+            for name in sorted(redundant_to_drop):
+                if name in numeric_cols:
+                    numeric_cols.remove(name)
+                    dropped_columns.append({"name": name, "reason": "redundant"})
+                    transform_log.append(f"Dropped '{name}' (redundant pair detected by exploration).")
+
+            hooks.progress(self.meta.name, 30, "Building cleaned numeric matrix.")
+
+            if not numeric_cols:
+                return self._empty_result(transform_log, dropped_columns)
+
+            cleaned = df[numeric_cols].apply(pd.to_numeric, errors="coerce").copy()
+
+            null_count = int(cleaned.isna().sum().sum())
+            if null_count > 0:
+                medians = cleaned.median()
+                cleaned = cleaned.fillna(medians)
+                transform_log.append(
+                    f"Imputed {null_count} NaN values with column medians across "
+                    f"{int((medians.index.size - (cleaned.isna().sum() == 0).sum()))} columns."
+                )
+                if cleaned.isna().any().any():
+                    cleaned = cleaned.fillna(0.0)
+                    transform_log.append("Filled remaining all-NaN columns with 0.")
+
+            cleaned_df = cleaned.copy()
 
         hooks.progress(self.meta.name, 50, "Applying transforms.")
 
@@ -142,6 +167,21 @@ class DimensionalityStage(BaseStage):
             f"Final matrix: {scaled.shape[0]} rows x {scaled.shape[1]} features."
         )
 
+        # --- UMAP (optional) ---
+        umap_2d = np.array([])
+        hooks.progress(self.meta.name, 85, "Running UMAP projection (optional).")
+        try:
+            import umap as umap_lib  # noqa: PLC0415
+            n_umap = min(len(scaled), 5000)
+            rng_idx = np.random.default_rng(42).choice(len(scaled), size=n_umap, replace=False)
+            reducer = umap_lib.UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.1)
+            import warnings as _w
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                umap_2d = reducer.fit_transform(scaled[rng_idx])
+        except Exception:
+            pass  # umap is optional
+
         hooks.progress(self.meta.name, 90, "Building interpretations.")
 
         outputs = {
@@ -149,6 +189,7 @@ class DimensionalityStage(BaseStage):
             "transformed_df": transformed_df,
             "pca_components": components,
             "pca_2d": pca_2d,
+            "umap_2d": umap_2d,
             "pca_explained_variance": explained,
             "intrinsic_dim": intrinsic_dim,
             "n_components_50": n50,
@@ -157,9 +198,14 @@ class DimensionalityStage(BaseStage):
             "transform_log": transform_log,
             "dropped_columns": dropped_columns,
         }
+        projection_svg = (
+            self._projection_svg(umap_2d, [], title="UMAP")
+            if umap_2d.size > 0
+            else self._projection_svg(pca_2d, explained, title="PCA")
+        )
         figures = {
             "scree_plot": self._scree_svg(explained),
-            "projection_plot": self._projection_svg(pca_2d, explained),
+            "projection_plot": projection_svg,
         }
         interpretations = {
             "pca_variance": self._pca_interpretation(explained, intrinsic_dim, n50, n80, n95),
@@ -333,7 +379,7 @@ class DimensionalityStage(BaseStage):
             + "</svg>"
         )
 
-    def _projection_svg(self, pca_2d: np.ndarray, explained: list[float]) -> str:
+    def _projection_svg(self, pca_2d: np.ndarray, explained: list[float], title: str = "PCA") -> str:
         if pca_2d.size == 0:
             return ""
 
@@ -367,8 +413,16 @@ class DimensionalityStage(BaseStage):
                 f"<circle cx='{sx:.1f}' cy='{sy:.1f}' r='2.2' fill='rgba(15,106,139,0.55)' />"
             )
 
-        pc1 = explained[0] * 100 if explained else 0.0
-        pc2 = explained[1] * 100 if len(explained) > 1 else 0.0
+        if title == "UMAP":
+            axis1_label = "UMAP 1"
+            axis2_label = "UMAP 2"
+            chart_title = "UMAP 2D projection"
+        else:
+            pc1 = explained[0] * 100 if explained else 0.0
+            pc2 = explained[1] * 100 if len(explained) > 1 else 0.0
+            axis1_label = f"PC1 ({pc1:.1f}% var)"
+            axis2_label = f"PC2 ({pc2:.1f}% var)"
+            chart_title = "PC1 vs PC2 projection"
 
         return (
             f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {width} {height}' "
@@ -377,8 +431,8 @@ class DimensionalityStage(BaseStage):
             f"<line x1='{margin}' y1='{height - margin}' x2='{width - margin}' y2='{height - margin}' stroke='#b6c5cf' />"
             f"<line x1='{margin}' y1='{margin}' x2='{margin}' y2='{height - margin}' stroke='#b6c5cf' />"
             + "".join(circles)
-            + f"<text x='{width / 2:.1f}' y='20' font-size='14' text-anchor='middle' fill='#193042'>PC1 vs PC2 projection</text>"
-            + f"<text x='{width / 2:.1f}' y='{height - 10}' font-size='11' text-anchor='middle' fill='#5f7584'>PC1 ({pc1:.1f}% variance)</text>"
-            + f"<text x='16' y='{height / 2:.1f}' font-size='11' text-anchor='middle' fill='#5f7584' transform='rotate(-90 16 {height / 2:.1f})'>PC2 ({pc2:.1f}% variance)</text>"
+            + f"<text x='{width / 2:.1f}' y='20' font-size='14' text-anchor='middle' fill='#193042'>{chart_title}</text>"
+            + f"<text x='{width / 2:.1f}' y='{height - 10}' font-size='11' text-anchor='middle' fill='#5f7584'>{axis1_label}</text>"
+            + f"<text x='16' y='{height / 2:.1f}' font-size='11' text-anchor='middle' fill='#5f7584' transform='rotate(-90 16 {height / 2:.1f})'>{axis2_label}</text>"
             + "</svg>"
         )

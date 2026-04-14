@@ -36,6 +36,15 @@ class AutoencoderStage(BaseStage):
             return self._empty_result(
                 f"DVAE skipped because only {len(transformed_df)} rows are available; at least {min_rows} rows are needed."
             )
+        # DVAE's primary value is as an anomaly third-vote and a nonlinear
+        # sanity check on PCA. On low-dimensional tabular data PCA + a tree
+        # model already captures what DVAE captures, so we skip it cheaply.
+        min_features = 8 if is_fast else 12
+        if transformed_df.shape[1] < min_features:
+            return self._empty_result(
+                f"DVAE skipped: only {transformed_df.shape[1]} numeric features (need >= {min_features}). "
+                "On low-dimensional tabular data, PCA + tree models capture the same structure."
+            )
 
         max_fit_rows = 3000 if is_fast else 8000
         fit_df = transformed_df

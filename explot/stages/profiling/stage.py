@@ -227,7 +227,7 @@ class ProfilingStage(BaseStage):
         temporal_like = sample.str.contains(r"[-/:T ]", regex=True).mean()
         if temporal_like < 0.8:
             return False
-        parsed = pd.to_datetime(sample, errors="coerce")
+        parsed = pd.to_datetime(sample, errors="coerce", format="mixed", dayfirst=False)
         return bool((~parsed.isna()).mean() >= 0.8)
 
     def _datetime_profile(self, series: pd.Series) -> dict[str, str] | None:
@@ -236,7 +236,7 @@ class ProfilingStage(BaseStage):
             if is_datetime64_any_dtype(series):
                 parsed = series.dropna()
             else:
-                parsed = pd.to_datetime(series.dropna().astype(str), errors="coerce").dropna()
+                parsed = pd.to_datetime(series.dropna().astype(str), errors="coerce", format="mixed", dayfirst=False).dropna()
             if len(parsed) < 2:
                 return None
             dt_min = parsed.min()

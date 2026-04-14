@@ -21,10 +21,24 @@ dependencies = [
 autoencoder = [
   "torch>=2.2",
 ]
+ml = [
+  "lightgbm>=4.0",
+  "shap>=0.45",
+]
+umap = [
+  "umap-learn>=0.5",
+]
+survival = [
+  "lifelines>=0.27",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.4",
   "torch>=2.2",
+  "lightgbm>=4.0",
+  "shap>=0.45",
+  "umap-learn>=0.5",
+  "lifelines>=0.27",
 ]
 report = [
   "plotly>=5.20",

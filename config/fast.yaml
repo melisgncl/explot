@@ -16,3 +16,8 @@ report:
 
 budget:
   mode: fast
+  max_fit_rows: 8000
+  max_fit_rows_fast: 3000
+  leakage_delta_threshold: 0.10
+  leakage_score_floor: 0.60
+  verdict_lift_floor: 0.05

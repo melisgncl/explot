@@ -8,7 +8,8 @@ import pandas as pd
 
 from explot.state import PipelineState
 
-_SKIP_KEYS = {"cleaned_df", "transformed_df", "latent_df", "pca_2d", "umap_2d"}
+_SKIP_KEYS = {"cleaned_df", "transformed_df", "latent_df", "pca_2d", "umap_2d",
+              "_export_estimator", "_export_feature_names"}
 
 
 def _make_serializable(obj: Any) -> Any:

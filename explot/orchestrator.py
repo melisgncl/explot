@@ -15,6 +15,42 @@ from explot.state import PipelineState
 from explot.stages.base import StageMeta, StageResult
 
 
+def _save_best_model(state, model_path: Path) -> None:
+    """Refit and save the highest-scoring model across all targets as a joblib file."""
+    supervised = state.results.get("supervised")
+    if not (supervised and supervised.success):
+        return
+    best_models = supervised.outputs.get("best_models", {}) or {}
+    if not best_models:
+        return
+
+    # Pick the target with the highest score
+    best_target, best_info = max(best_models.items(), key=lambda kv: kv[1].get("mean", 0))
+    estimator = best_info.get("_export_estimator")
+    feature_names = best_info.get("_export_feature_names", [])
+    if estimator is None:
+        return
+
+    try:
+        import joblib
+        payload = {
+            "estimator": estimator,
+            "target": best_target,
+            "feature_names": feature_names,
+            "model_name": best_info.get("model", "unknown"),
+            "metric": best_info.get("metric", "unknown"),
+            "score": best_info.get("mean", 0),
+        }
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(payload, model_path)
+        # Store path in state for the report to reference
+        supervised.outputs["exported_model_path"] = str(model_path)
+        supervised.outputs["exported_model_target"] = best_target
+        supervised.outputs["exported_model_features"] = feature_names
+    except Exception:
+        pass  # model export is best-effort
+
+
 class Pipeline:
     def __init__(self, config: AppConfig):
         self.config = config
@@ -87,6 +123,8 @@ class Pipeline:
             save_state(state, cache_path)
 
         if output_path is not None:
+            model_path = Path(str(output_path).rsplit(".", 1)[0] + "_model.joblib")
+            _save_best_model(state, model_path)
             ReportGenerator().write(state, self.config, output_path)
         return state
 

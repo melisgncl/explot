@@ -9,8 +9,16 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.inspection import permutation_importance
-from sklearn.model_selection import KFold, StratifiedKFold, cross_validate, cross_val_predict
-from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import (
+    GroupKFold,
+    KFold,
+    StratifiedKFold,
+    TimeSeriesSplit,
+    cross_validate,
+    cross_val_predict,
+)
+from sklearn.pipeline import Pipeline as SklearnPipeline
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.svm import SVC, SVR
 
@@ -44,7 +52,7 @@ class SupervisedStage(BaseStage):
     meta = StageMeta(
         name="supervised",
         depends_on=("dimensionality",),
-        optional_deps=("profiling", "unsupervised", "autoencoder"),
+        optional_deps=("profiling", "preprocessing", "unsupervised", "autoencoder"),
     )
 
     def run(self, state, config, hooks) -> StageResult:
@@ -59,6 +67,15 @@ class SupervisedStage(BaseStage):
             latent_df = autoencoder.outputs.get("latent_df")
             if isinstance(latent_df, pd.DataFrame) and not latent_df.empty:
                 track_b_df = latent_df
+
+        # Track C: raw preprocessed features (no PCA). Tree models often outperform
+        # PCA tracks when the encoded feature structure is preserved intact.
+        track_c_df = None
+        preprocessing = state.results.get("preprocessing")
+        if preprocessing and preprocessing.success:
+            prep_df = preprocessing.outputs.get("preprocessed_df")
+            if isinstance(prep_df, pd.DataFrame) and not prep_df.empty:
+                track_c_df = prep_df
 
         if track_a_df is None or track_a_df.empty:
             return self._empty_result("No features available for supervised probes.")
@@ -91,16 +108,22 @@ class SupervisedStage(BaseStage):
                 "'class', 'outcome', etc. Use --target COLUMN to specify one explicitly."
             )
 
-        is_fast = getattr(config, "budget", None) and getattr(config.budget, "mode", "") == "fast"
+        budget = getattr(config, "budget", None)
+        is_fast = budget and getattr(budget, "mode", "") == "fast"
         n_folds = 3 if is_fast else 5
+        max_fit_rows = int(getattr(budget, "max_fit_rows_fast" if is_fast else "max_fit_rows", 3000 if is_fast else 8000))
+        leakage_delta_threshold = float(getattr(budget, "leakage_delta_threshold", 0.10))
+        leakage_score_floor = float(getattr(budget, "leakage_score_floor", 0.60))
 
         model_results_track_a: dict[str, list[dict]] = {}
         model_results_track_b: dict[str, list[dict]] = {}
+        model_results_track_c: dict[str, list[dict]] = {}
         feature_importances: dict[str, dict[str, list[dict]]] = {}
         best_models: dict[str, dict] = {}
         track_comparison: dict[str, dict[str, object]] = {}
         evaluation_details: dict[str, dict[str, object]] = {}
         sampling_notes: list[str] = []
+        sampling_info: dict[str, dict[str, int]] = {}
 
         for i, cand in enumerate(candidates):
             pct = 20 + int(60 * i / len(candidates))
@@ -114,13 +137,15 @@ class SupervisedStage(BaseStage):
                 continue
 
             is_clf = cand["task_type"] == "classification"
-            sampled_idx = self._sample_indices(y_series, is_clf, is_fast)
+            total_rows = len(valid_idx)
+            sampled_idx = self._sample_indices(y_series, is_clf, max_fit_rows)
             if sampled_idx is not None:
                 note = (
                     f"Target '{target_name}' was scored on a deterministic sample of "
-                    f"{len(sampled_idx)} rows from {len(valid_idx)} available rows."
+                    f"{len(sampled_idx)} rows from {total_rows} available rows."
                 )
                 sampling_notes.append(note)
+                sampling_info[target_name] = {"sampled": len(sampled_idx), "total": total_rows}
                 if hasattr(hooks, "log"):
                     hooks.log(self.meta.name, note)
                 valid_idx = sampled_idx
@@ -129,8 +154,19 @@ class SupervisedStage(BaseStage):
             y_encoded, target_labels = self._encode_target(y_series, is_clf)
             cv = self._build_cv(y_encoded, is_clf, n_folds)
 
+            # Detect class imbalance before building models so we can apply
+            # balanced weights to LR, RF, and SVM when ratio >= 5.
+            imbalance_ratio = None
+            use_balanced = False
+            if is_clf:
+                counts = pd.Series(y_encoded).value_counts()
+                if len(counts) >= 2 and counts.iloc[-1] > 0:
+                    imbalance_ratio = round(float(counts.iloc[0] / counts.iloc[-1]), 2)
+                    if imbalance_ratio >= 5:
+                        use_balanced = True
+
             track_outputs: dict[str, dict[str, object]] = {}
-            for track_name, feature_df in (("track_a", track_a_df), ("track_b", track_b_df)):
+            for track_name, feature_df in (("track_a", track_a_df), ("track_b", track_b_df), ("track_c", track_c_df)):
                 if feature_df is None or feature_df.empty:
                     continue
                 prepared = self._prepare_track_features(feature_df, target_name, valid_idx, hooks)
@@ -145,6 +181,7 @@ class SupervisedStage(BaseStage):
                     is_clf,
                     is_fast,
                     cv,
+                    use_balanced=use_balanced,
                 )
                 if track_result is None:
                     continue
@@ -158,12 +195,38 @@ class SupervisedStage(BaseStage):
                 model_results_track_a[target_name] = track_outputs["track_a"]["results"]
             if "track_b" in track_outputs:
                 model_results_track_b[target_name] = track_outputs["track_b"]["results"]
+            if "track_c" in track_outputs:
+                model_results_track_c[target_name] = track_outputs["track_c"]["results"]
 
             diagnostics = self._target_diagnostics(state.raw_df, target_name, valid_idx, track_outputs, is_clf, profiling)
+            diagnostics["used_balanced_weights"] = use_balanced
+            if imbalance_ratio is not None:
+                diagnostics["imbalance_ratio"] = imbalance_ratio
             best_track_name, best_track = max(
                 track_outputs.items(),
                 key=lambda item: item[1]["best"]["mean"],
             )
+
+            # Audit for group- and time-based leakage by re-scoring the best
+            # model with alternative splitters and comparing to the KFold score.
+            audit_models = dict(self._build_models(is_clf, is_fast=is_fast, n_rows=len(valid_idx)))
+            audit_estimator = audit_models.get(best_track["best"]["model"])
+            group_audit = self._group_leakage_audit(
+                state.raw_df, target_name, valid_idx, best_track, audit_estimator, is_clf, profiling,
+                leakage_delta_threshold, leakage_score_floor,
+            )
+            temporal_audit = self._temporal_leakage_audit(
+                state.raw_df, target_name, valid_idx, best_track, audit_estimator, is_clf, profiling,
+                leakage_delta_threshold, leakage_score_floor,
+            )
+            best_track.pop("X_df", None)
+            best_track.pop("y_encoded", None)
+            diagnostics["group_audit"] = group_audit
+            diagnostics["temporal_audit"] = temporal_audit
+            if group_audit.get("leakage_detected"):
+                diagnostics["trust_flags"] = sorted(set(diagnostics["trust_flags"] + ["group_leakage", "possible_leakage"]))
+            if temporal_audit.get("leakage_detected"):
+                diagnostics["trust_flags"] = sorted(set(diagnostics["trust_flags"] + ["temporal_leakage", "possible_leakage"]))
 
             best_models[target_name] = {
                 **best_track["best"],
@@ -174,10 +237,23 @@ class SupervisedStage(BaseStage):
             feature_importances[target_name] = {
                 track_name: data["feature_importance"] for track_name, data in track_outputs.items()
             }
-            # Store permutation importance from the best track
+            # Store permutation and SHAP importance from the best track
             best_perm = track_outputs.get(best_track_name, {}).get("permutation_importance", [])
             if best_perm:
                 best_models[target_name]["permutation_importance"] = best_perm
+            best_shap = track_outputs.get(best_track_name, {}).get("shap_importance", [])
+            if best_shap:
+                best_models[target_name]["shap_importance"] = best_shap
+            best_waterfall = track_outputs.get(best_track_name, {}).get("shap_waterfall", {})
+            if best_waterfall:
+                best_models[target_name]["shap_waterfall"] = best_waterfall
+            # Store export estimator (refitted on full data) — excluded from JSON by _SKIP_KEYS
+            export_est = track_outputs.get(best_track_name, {}).get("export_estimator")
+            if export_est is not None:
+                best_models[target_name]["_export_estimator"] = export_est
+                best_models[target_name]["_export_feature_names"] = (
+                    track_outputs.get(best_track_name, {}).get("export_feature_names", [])
+                )
             evaluation_details[target_name] = {
                 track_name: {
                     "metrics": data["best_metrics"],
@@ -200,11 +276,13 @@ class SupervisedStage(BaseStage):
             "candidate_targets": candidates,
             "model_results_track_a": model_results_track_a,
             "model_results_track_b": model_results_track_b,
+            "model_results_track_c": model_results_track_c,
             "feature_importances": feature_importances,
             "best_models": best_models,
             "track_comparison": track_comparison,
             "evaluation_details": evaluation_details,
             "sampling_notes": sampling_notes,
+            "sampling_info": sampling_info,
         }
         interpretations = {
             "model_comparison": self._comparison_interp(best_models),
@@ -247,8 +325,9 @@ class SupervisedStage(BaseStage):
         is_clf: bool,
         is_fast: bool,
         cv,
+        use_balanced: bool = False,
     ) -> dict[str, object] | None:
-        models = self._build_models(is_clf, is_fast, len(X_df))
+        models = self._build_models(is_clf, is_fast, len(X_df), use_balanced=use_balanced)
         results: list[dict] = []
         fitted_models: list[tuple[str, object]] = []
 
@@ -307,6 +386,29 @@ class SupervisedStage(BaseStage):
             is_clf,
             X_df.columns.tolist(),
         )
+        shap_importance = self._shap_importance(
+            best_estimator,
+            X_df.to_numpy(dtype=float),
+            y_encoded,
+            is_clf,
+            X_df.columns.tolist(),
+        )
+        shap_waterfall = self._shap_waterfall(
+            best_estimator,
+            X_df.to_numpy(dtype=float),
+            y_encoded,
+            is_clf,
+            X_df.columns.tolist(),
+        )
+        # Refit best estimator on the full available data for model export
+        X_arr = X_df.to_numpy(dtype=float)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                export_estimator = clone(best_estimator).fit(X_arr, y_encoded)
+        except Exception:
+            export_estimator = None
+
         return {
             "results": results,
             "best": best,
@@ -315,6 +417,12 @@ class SupervisedStage(BaseStage):
             "labels": labels,
             "feature_importance": feature_importance,
             "permutation_importance": perm_importance,
+            "shap_importance": shap_importance,
+            "shap_waterfall": shap_waterfall,
+            "export_estimator": export_estimator,
+            "export_feature_names": X_df.columns.tolist(),
+            "X_df": X_df,
+            "y_encoded": y_encoded,
         }
 
     def _best_model_diagnostics(self, estimator, X, y, target_labels, is_clf: bool, cv):
@@ -389,9 +497,8 @@ class SupervisedStage(BaseStage):
         self,
         y_series: pd.Series,
         is_classification: bool,
-        is_fast: bool,
+        max_rows: int,
     ) -> pd.Index | None:
-        max_rows = 3000 if is_fast else 8000
         if len(y_series) <= max_rows:
             return None
 
@@ -426,10 +533,7 @@ class SupervisedStage(BaseStage):
         if profiling and profiling.success:
             cat_cols = set(profiling.outputs.get("categorical_column_names", []))
             numeric_cols = set(profiling.outputs.get("numeric_column_names", []))
-            role_by_column = {
-                str(name): str(profile.get("role_guess", "unknown"))
-                for name, profile in profiling.outputs.get("column_profiles", {}).items()
-            }
+            role_by_column = self._role_by_column(profiling)
 
         for col in raw_df.columns:
             series = raw_df[col].dropna()
@@ -460,20 +564,33 @@ class SupervisedStage(BaseStage):
 
         return candidates[:5]
 
-    def _build_models(self, is_clf: bool, is_fast: bool, n_rows: int):
+    def _build_models(self, is_clf: bool, is_fast: bool, n_rows: int, use_balanced: bool = False):
+        cw = "balanced" if (use_balanced and is_clf) else None
         models = []
         if is_clf:
             models.append(("Baseline", DummyClassifier(strategy="most_frequent", random_state=42)))
-            models.append(("LogisticRegression", LogisticRegression(max_iter=500, solver="lbfgs", C=1.0, random_state=42)))
-            models.append(("RandomForest", RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1)))
+            models.append(("LogisticRegression", SklearnPipeline([
+                ("scaler", StandardScaler()),
+                ("lr", LogisticRegression(max_iter=500, solver="lbfgs", C=1.0, random_state=42, class_weight=cw)),
+            ])))
+            models.append(("RandomForest", RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=1, class_weight=cw)))
             if not (is_fast and n_rows > 5000):
-                models.append(("SVM_RBF", SVC(kernel="rbf", random_state=42, probability=True)))
+                models.append(("SVM_RBF", SklearnPipeline([
+                    ("scaler", StandardScaler()),
+                    ("svm", SVC(kernel="rbf", random_state=42, probability=True, class_weight=cw)),
+                ])))
         else:
             models.append(("Baseline", DummyRegressor(strategy="mean")))
-            models.append(("Ridge", Ridge(alpha=1.0)))
+            models.append(("Ridge", SklearnPipeline([
+                ("scaler", StandardScaler()),
+                ("ridge", Ridge(alpha=1.0)),
+            ])))
             models.append(("RandomForest", RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=1)))
             if not (is_fast and n_rows > 5000):
-                models.append(("SVM_RBF", SVR(kernel="rbf")))
+                models.append(("SVM_RBF", SklearnPipeline([
+                    ("scaler", StandardScaler()),
+                    ("svm", SVR(kernel="rbf")),
+                ])))
 
         xgb_clf, xgb_reg = _try_import_xgboost()
         if xgb_clf:
@@ -485,7 +602,8 @@ class SupervisedStage(BaseStage):
         lgbm_clf, lgbm_reg = _try_import_lightgbm()
         if lgbm_clf:
             if is_clf:
-                models.append(("LightGBM", lgbm_clf(n_estimators=100, random_state=42, verbose=-1)))
+                lgbm_kw = {"class_weight": "balanced"} if use_balanced else {}
+                models.append(("LightGBM", lgbm_clf(n_estimators=100, random_state=42, verbose=-1, **lgbm_kw)))
             else:
                 models.append(("LightGBM", lgbm_reg(n_estimators=100, random_state=42, verbose=-1)))
         return models
@@ -522,12 +640,12 @@ class SupervisedStage(BaseStage):
             if feature_as_str.equals(target_as_str):
                 exact_copy_columns.append(str(col))
                 continue
-            if aligned["feature"].nunique() <= 2000:
-                # Check feature->target direction: does each feature value
-                # predict exactly one target value?  This catches derived
-                # columns and lookup-table proxies.  The reverse direction
-                # (target->feature) is not checked because many-to-one
-                # mappings are normal for categorical targets.
+            feature_card = int(aligned["feature"].nunique())
+            # Only check feature->target determinism when the feature has
+            # genuinely low cardinality relative to row count. For continuous
+            # features, each row has a unique value and would trivially map
+            # to one target, producing a false proxy flag.
+            if feature_card <= 2000 and feature_card <= max(5, len(aligned) // 2):
                 mapping = aligned.groupby("feature")["target"].nunique()
                 if not mapping.empty and float((mapping <= 1).mean()) >= 0.995:
                     deterministic_proxy_columns.append(str(col))
@@ -550,10 +668,7 @@ class SupervisedStage(BaseStage):
         datetime_cols = set()
         if profiling and profiling.success:
             datetime_cols = set(profiling.outputs.get("datetime_column_names", []))
-            role_by_col = {
-                str(name): str(profile.get("role_guess", "unknown"))
-                for name, profile in profiling.outputs.get("column_profiles", {}).items()
-            }
+            role_by_col = self._role_by_column(profiling)
             datetime_cols |= {col for col, role in role_by_col.items() if role == "time_like"}
         temporal_feature_columns = [
             str(col) for col in raw_df.columns
@@ -658,6 +773,194 @@ class SupervisedStage(BaseStage):
                 continue
         return leaky
 
+    def _role_by_column(self, profiling) -> dict[str, str]:
+        if not (profiling and profiling.success):
+            return {}
+        return {
+            str(name): str(profile.get("role_guess", "unknown"))
+            for name, profile in profiling.outputs.get("column_profiles", {}).items()
+        }
+
+    def _id_like_columns(self, profiling) -> list[str]:
+        return [col for col, role in self._role_by_column(profiling).items() if role == "id_like"]
+
+    def _rescore_with_splitter(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        estimator,
+        is_clf: bool,
+        splitter,
+        groups: np.ndarray | None,
+    ) -> float | None:
+        """Score estimator under a different CV splitter."""
+        if estimator is None:
+            return None
+        scoring = "f1_macro" if is_clf else "r2"
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                scores = cross_validate(
+                    clone(estimator),
+                    X,
+                    y,
+                    cv=splitter,
+                    scoring=scoring,
+                    groups=groups,
+                )
+            return float(np.mean(scores["test_score"]))
+        except Exception:
+            return None
+
+    def _group_leakage_audit(
+        self,
+        raw_df: pd.DataFrame,
+        target_name: str,
+        valid_idx: pd.Index,
+        best_track: dict,
+        estimator,
+        is_clf: bool,
+        profiling,
+        leakage_delta_threshold: float = 0.10,
+        leakage_score_floor: float = 0.60,
+    ) -> dict:
+        """If an id-like column exists, re-score the best model with GroupKFold
+        and compare to KFold. A large positive delta means random folds leaked
+        the id into both train and test.
+        """
+        id_cols = [c for c in self._id_like_columns(profiling) if c != target_name and c in raw_df.columns]
+        result = {
+            "checked": False,
+            "leakage_detected": False,
+            "id_column": None,
+            "kfold_score": None,
+            "group_score": None,
+            "delta": None,
+            "note": "No id-like column detected — group leakage check skipped.",
+        }
+        if not id_cols:
+            return result
+
+        # Pick the id column with the highest cardinality (most likely a true id)
+        id_col = max(id_cols, key=lambda c: raw_df[c].nunique())
+        groups = raw_df.loc[valid_idx, id_col].astype(str).to_numpy()
+        n_unique_groups = len(np.unique(groups))
+        if n_unique_groups < 3 or n_unique_groups >= len(groups):
+            # Either too few groups for GroupKFold, or every row is its own
+            # group (which makes GroupKFold identical to KFold).
+            result["note"] = (
+                f"Group audit skipped: '{id_col}' has {n_unique_groups} unique groups "
+                f"over {len(groups)} rows."
+            )
+            return result
+
+        X_df = best_track.get("X_df")
+        y_encoded = best_track.get("y_encoded")
+        if X_df is None or y_encoded is None:
+            return result
+        X = X_df.to_numpy(dtype=float)
+        kfold_score = best_track["best"]["mean"]
+        n_splits = min(5, n_unique_groups)
+        group_score = self._rescore_with_splitter(
+            X, y_encoded, estimator, is_clf, GroupKFold(n_splits=n_splits), groups,
+        )
+        if group_score is None:
+            return result
+
+        delta = round(float(kfold_score - group_score), 4)
+        detected = delta >= leakage_delta_threshold and kfold_score >= leakage_score_floor
+        return {
+            "checked": True,
+            "leakage_detected": detected,
+            "id_column": id_col,
+            "kfold_score": round(float(kfold_score), 4),
+            "group_score": round(float(group_score), 4),
+            "delta": delta,
+            "note": (
+                f"GroupKFold on '{id_col}' scored {group_score:.3f} vs KFold {kfold_score:.3f} "
+                f"(delta {delta:+.3f}). " + ("Likely fold leakage." if detected else "No leakage signal.")
+            ),
+        }
+
+    def _temporal_leakage_audit(
+        self,
+        raw_df: pd.DataFrame,
+        target_name: str,
+        valid_idx: pd.Index,
+        best_track: dict,
+        estimator,
+        is_clf: bool,
+        profiling,
+        leakage_delta_threshold: float = 0.10,
+        leakage_score_floor: float = 0.60,
+    ) -> dict:
+        """If a datetime column exists, re-score the best model with
+        TimeSeriesSplit on time-sorted data. A large positive delta means
+        random folds were using the future to predict the past.
+        """
+        result = {
+            "checked": False,
+            "leakage_detected": False,
+            "time_column": None,
+            "kfold_score": None,
+            "time_score": None,
+            "delta": None,
+            "note": "No datetime column detected — temporal leakage check skipped.",
+        }
+        datetime_cols: list[str] = []
+        if profiling and profiling.success:
+            datetime_cols = list(profiling.outputs.get("datetime_column_names", []))
+        datetime_cols = [c for c in datetime_cols if c != target_name and c in raw_df.columns]
+        if not datetime_cols:
+            return result
+
+        time_col = datetime_cols[0]
+        time_series = pd.to_datetime(raw_df.loc[valid_idx, time_col], errors="coerce")
+        ordered_idx = time_series.dropna().sort_values().index
+        if len(ordered_idx) < 40:
+            result["note"] = f"Temporal audit skipped: only {len(ordered_idx)} parseable timestamps."
+            return result
+
+        X_df = best_track.get("X_df")
+        y_encoded = best_track.get("y_encoded")
+        if X_df is None or y_encoded is None:
+            return result
+
+        aligned_X = X_df.loc[X_df.index.intersection(ordered_idx)].reindex(ordered_idx)
+        aligned_y = pd.Series(y_encoded, index=X_df.index).reindex(ordered_idx)
+        aligned = pd.concat([aligned_X, aligned_y.rename("_y")], axis=1).dropna()
+        if len(aligned) < 40:
+            result["note"] = f"Temporal audit skipped: only {len(aligned)} rows after alignment."
+            return result
+
+        X = aligned.drop(columns=["_y"]).to_numpy(dtype=float)
+        y_arr = aligned["_y"].to_numpy()
+        if is_clf and len(np.unique(y_arr)) < 2:
+            result["note"] = "Temporal audit skipped: only one class present after time ordering."
+            return result
+
+        n_splits = min(5, max(2, len(aligned) // 20))
+        time_score = self._rescore_with_splitter(
+            X, y_arr, estimator, is_clf, TimeSeriesSplit(n_splits=n_splits), None,
+        )
+        if time_score is None:
+            return result
+        kfold_score = best_track["best"]["mean"]
+        delta = round(float(kfold_score - time_score), 4)
+        detected = delta >= leakage_delta_threshold and kfold_score >= leakage_score_floor
+        return {
+            "checked": True,
+            "leakage_detected": detected,
+            "time_column": time_col,
+            "kfold_score": round(float(kfold_score), 4),
+            "time_score": round(float(time_score), 4),
+            "delta": delta,
+            "note": (
+                f"TimeSeriesSplit on '{time_col}' scored {time_score:.3f} vs KFold {kfold_score:.3f} "
+                f"(delta {delta:+.3f}). " + ("Likely temporal leakage." if detected else "No leakage signal.")
+            ),
+        }
+
     def _compare_tracks(self, track_outputs: dict[str, dict[str, object]]) -> dict[str, object]:
         has_a = "track_a" in track_outputs
         has_b = "track_b" in track_outputs
@@ -706,6 +1009,185 @@ class SupervisedStage(BaseStage):
         except Exception:
             return []
 
+    def _shap_importance(self, estimator, X, y, is_clf: bool, col_names: list[str]) -> list[dict]:
+        """SHAP-based feature importance. Returns top-10 by mean |SHAP|."""
+        try:
+            import shap  # optional dependency
+        except ImportError:
+            return []
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fitted = clone(estimator).fit(X, y)
+            # Unwrap sklearn Pipeline to get underlying estimator for explainer selection
+            inner = fitted
+            if hasattr(fitted, "named_steps"):
+                step_names = list(fitted.named_steps.keys())
+                inner = fitted.named_steps[step_names[-1]]
+                X_transformed = fitted[:-1].transform(X)
+            else:
+                X_transformed = X
+
+            tree_types = ("RandomForestClassifier", "RandomForestRegressor",
+                          "XGBClassifier", "XGBRegressor",
+                          "LGBMClassifier", "LGBMRegressor")
+            linear_types = ("LogisticRegression", "Ridge")
+            type_name = type(inner).__name__
+
+            sample_size = min(500, len(X_transformed))
+            rng = np.random.default_rng(42)
+            idx = rng.choice(len(X_transformed), size=sample_size, replace=False)
+            X_sample = X_transformed[idx]
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                if type_name in tree_types:
+                    explainer = shap.TreeExplainer(inner)
+                    shap_values = explainer.shap_values(X_sample)
+                elif type_name in linear_types:
+                    background = shap.maskers.Independent(X_transformed, max_samples=min(50, len(X_transformed)))
+                    explainer = shap.LinearExplainer(inner, background)
+                    shap_values = explainer.shap_values(X_sample)
+                else:
+                    # Fallback: permutation-based
+                    return []
+
+            # Normalise shap_values to (n_samples, n_features):
+            # - old shap: list of (n_samples, n_features) arrays (one per class)
+            # - new shap: (n_samples, n_features, n_classes) ndarray for trees
+            # - regression / binary new shap: (n_samples, n_features)
+            sv = np.array(shap_values) if not isinstance(shap_values, np.ndarray) else shap_values
+            if sv.ndim == 3:
+                arr = np.abs(sv).mean(axis=2)   # (n_samples, n_features)
+            elif sv.ndim == 1 and len(sv) > 0 and isinstance(sv[0], np.ndarray):
+                arr = np.mean([np.abs(s) for s in sv], axis=0)
+            else:
+                arr = np.abs(sv)
+
+            mean_abs = arr.mean(axis=0)
+            indices = np.argsort(mean_abs)[::-1][:10]
+            return [
+                {
+                    "feature": col_names[i] if i < len(col_names) else f"feature_{i}",
+                    "importance": round(float(mean_abs[i]), 4),
+                }
+                for i in indices if mean_abs[i] > 0
+            ]
+        except Exception:
+            return []
+
+    def _shap_waterfall(self, estimator, X, y, is_clf: bool, col_names: list[str]) -> dict:
+        """Return signed SHAP values for one representative sample (highest-confidence prediction).
+
+        Returns dict with keys: base_value, prediction, features (list of {feature, value, shap}).
+        Returns {} on any failure.
+        """
+        try:
+            import shap  # optional dependency
+        except ImportError:
+            return {}
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fitted = clone(estimator).fit(X, y)
+            inner = fitted
+            X_transformed = X
+            if hasattr(fitted, "named_steps"):
+                step_names = list(fitted.named_steps.keys())
+                inner = fitted.named_steps[step_names[-1]]
+                X_transformed = fitted[:-1].transform(X)
+
+            tree_types = ("RandomForestClassifier", "RandomForestRegressor",
+                          "XGBClassifier", "XGBRegressor",
+                          "LGBMClassifier", "LGBMRegressor")
+            linear_types = ("LogisticRegression", "Ridge")
+            type_name = type(inner).__name__
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                if type_name in tree_types:
+                    explainer = shap.TreeExplainer(inner)
+                elif type_name in linear_types:
+                    background = shap.maskers.Independent(X_transformed, max_samples=min(50, len(X_transformed)))
+                    explainer = shap.LinearExplainer(inner, background)
+                else:
+                    return {}
+
+            # Pick the sample with the most extreme prediction (highest confidence)
+            sample_size = min(200, len(X_transformed))
+            rng = np.random.default_rng(42)
+            idx = rng.choice(len(X_transformed), size=sample_size, replace=False)
+            X_sample = X_transformed[idx]
+
+            # Get predictions to find highest-confidence sample
+            try:
+                if is_clf and hasattr(inner, "predict_proba"):
+                    proba = inner.predict_proba(X_sample)
+                    confidence = np.max(proba, axis=1)
+                    best_idx = int(np.argmax(confidence))
+                else:
+                    best_idx = 0
+            except Exception:
+                best_idx = 0
+
+            X_one = X_sample[best_idx : best_idx + 1]
+            shap_values = explainer.shap_values(X_one)
+
+            # Normalise to 1D signed array for the chosen sample
+            sv = np.array(shap_values) if not isinstance(shap_values, np.ndarray) else shap_values
+            if sv.ndim == 3:
+                # (1, n_features, n_classes) — use class 1 for binary, mean for multi
+                signed = sv[0, :, 1] if sv.shape[2] == 2 else sv[0].mean(axis=1)
+            elif sv.ndim == 1 and len(sv) > 0 and isinstance(sv[0], np.ndarray):
+                # old shap list format — use class 1
+                signed = sv[1][0] if len(sv) > 1 else sv[0][0]
+            elif sv.ndim == 2:
+                signed = sv[0]
+            else:
+                return {}
+
+            signed = np.array(signed, dtype=float)
+            if signed.ndim != 1 or len(signed) != len(col_names):
+                return {}
+
+            # Base value
+            try:
+                base_val = explainer.expected_value
+                if isinstance(base_val, (list, np.ndarray)):
+                    base_val = float(base_val[1]) if len(base_val) > 1 else float(base_val[0])
+                else:
+                    base_val = float(base_val)
+            except Exception:
+                base_val = 0.0
+
+            # Prediction for this sample
+            try:
+                if is_clf and hasattr(inner, "predict_proba"):
+                    pred = float(inner.predict_proba(X_one)[0, -1])
+                else:
+                    pred = float(inner.predict(X_one)[0])
+            except Exception:
+                pred = float(base_val + signed.sum())
+
+            # Top 10 by abs value
+            top_idx = np.argsort(np.abs(signed))[::-1][:10]
+            raw_x = X_one[0]
+            features = [
+                {
+                    "feature": col_names[i] if i < len(col_names) else f"feature_{i}",
+                    "value": round(float(raw_x[i]), 4) if i < len(raw_x) else 0.0,
+                    "shap": round(float(signed[i]), 4),
+                }
+                for i in top_idx
+            ]
+            return {
+                "base_value": round(base_val, 4),
+                "prediction": round(pred, 4),
+                "features": features,
+            }
+        except Exception:
+            return {}
+
     def _rf_importance(self, X, y, is_clf: bool, col_names: list[str]) -> list[dict]:
         try:
             rf = (RandomForestClassifier if is_clf else RandomForestRegressor)(n_estimators=50, random_state=42, n_jobs=1)
@@ -738,6 +1220,7 @@ class SupervisedStage(BaseStage):
                 "track_comparison": {},
                 "evaluation_details": {},
                 "sampling_notes": [],
+                "sampling_info": {},
             },
             interpretations={
                 "model_comparison": reason,

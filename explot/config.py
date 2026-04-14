@@ -26,6 +26,11 @@ class ReportConfig:
 @dataclass(frozen=True)
 class BudgetConfig:
     mode: str = "full"
+    max_fit_rows: int = 8000
+    max_fit_rows_fast: int = 3000
+    leakage_delta_threshold: float = 0.10
+    leakage_score_floor: float = 0.60
+    verdict_lift_floor: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -59,6 +64,13 @@ def load_config(path: Path) -> AppConfig:
             title=str(report_raw.get("title", "Explot Report")),
             include_debug=bool(report_raw.get("include_debug", False)),
         ),
-        budget=BudgetConfig(mode=str(budget_raw.get("mode", "full"))),
+        budget=BudgetConfig(
+            mode=str(budget_raw.get("mode", "full")),
+            max_fit_rows=int(budget_raw.get("max_fit_rows", 8000)),
+            max_fit_rows_fast=int(budget_raw.get("max_fit_rows_fast", 3000)),
+            leakage_delta_threshold=float(budget_raw.get("leakage_delta_threshold", 0.10)),
+            leakage_score_floor=float(budget_raw.get("leakage_score_floor", 0.60)),
+            verdict_lift_floor=float(budget_raw.get("verdict_lift_floor", 0.05)),
+        ),
     )
 

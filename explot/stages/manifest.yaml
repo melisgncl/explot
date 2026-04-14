@@ -7,10 +7,15 @@ stages:
     module: explot.stages.exploration.stage
     class_name: ExplorationStage
     optional_deps: []
+  - name: preprocessing
+    module: explot.stages.preprocessing.stage
+    class_name: PreprocessingStage
+    optional_deps: []
   - name: dimensionality
     module: explot.stages.dimensionality.stage
     class_name: DimensionalityStage
-    optional_deps: []
+    optional_deps:
+      - preprocessing
   - name: autoencoder
     module: explot.stages.autoencoder.stage
     class_name: AutoencoderStage
@@ -25,12 +30,20 @@ stages:
     class_name: SupervisedStage
     optional_deps:
       - profiling
+      - preprocessing
       - unsupervised
+  - name: survival
+    module: explot.stages.survival.stage
+    class_name: SurvivalStage
+    optional_deps:
+      - preprocessing
   - name: findings
     module: explot.stages.findings.stage
     class_name: FindingsStage
     optional_deps:
       - exploration
+      - preprocessing
       - dimensionality
       - unsupervised
       - supervised
+      - survival
