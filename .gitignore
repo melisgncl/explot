@@ -19,6 +19,7 @@ _tmp*/
 *.so
 *.joblib
 data/nyc_taxi_yellow_2024_01.parquet
+data/creditcard_fraud.csv
 .DS_Store
 Thumbs.db
 simulator/output/
