@@ -41,6 +41,28 @@ explot data/sleep_health_dataset.csv -o results.json --json --fast
 
 See [Installation Options](#installation-options) for extras (SHAP, survival, DVAE).
 
+## Docker (no Python install needed)
+
+```bash
+# Build once (~900 MB, includes LightGBM + SHAP + lifelines)
+docker build -t explot .
+
+# Run on your data — mount the folder containing your file
+docker run --rm -v "$(pwd)":/workspace explot mydata.csv -o report.html
+
+# Fast mode for large files
+docker run --rm -v "$(pwd)":/workspace explot mydata.csv -o report.html --fast
+
+# Windows PowerShell
+docker run --rm -v "${PWD}:/workspace" explot mydata.csv -o report.html
+```
+
+The report is written back to your mounted directory. No Python, no pip, no conda needed.
+
+> **Demo data:** `data/telco_churn.csv` is included in the repo. For the credit card fraud demo,
+> download from [Kaggle Credit Card Fraud Detection](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud)
+> and place it at `data/creditcard_fraud.csv`.
+
 ## Use With Your Own Data
 
 Explot is designed so someone can point it at a tabular file and get a report back.
