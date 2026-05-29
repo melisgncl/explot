@@ -63,7 +63,7 @@ def test_supervised_has_feature_importance(scrna_data):
     result, _ = _run_supervised(df)
     fi = result.outputs["feature_importances"]
     assert len(fi) > 0
-    for target, track_map in fi.items():
+    for _target, track_map in fi.items():
         assert len(track_map) > 0
         assert any(len(feats) > 0 for feats in track_map.values())
 

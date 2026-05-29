@@ -136,7 +136,7 @@ class SurvivalStage(BaseStage):
                     continue
             if nonneg and (series < 0).any():
                 continue
-            if binary and set(series.unique()) - {0, 1, 0.0, 1.0}:
+            if binary and set(series.unique()) - {0, 1}:
                 # Allow 0/1 encoded or True/False
                 unique_vals = set(series.dropna().astype(int).unique())
                 if unique_vals != {0, 1}:
@@ -314,7 +314,6 @@ class SurvivalStage(BaseStage):
         # Determine x/y ranges
         all_times: list[float] = km_overall.get("times", [])
         max_t = max(all_times) if all_times else 1.0
-        min_surv = 0.0
 
         def sx(t: float) -> float:
             return ml + (t / max_t) * pw

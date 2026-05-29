@@ -487,7 +487,7 @@ class ReportGenerator:
             "<div class='panel span-4'>"
             "<div class='section-kicker'>Fingerprint</div>"
             "<h3>Radar View</h3>"
-            f"<div class='figure'>{fingerprint_svg or '<p class=\"muted\">No fingerprint figure available.</p>'}</div>"
+            "<div class='figure'>" + (fingerprint_svg or "<p class='muted'>No fingerprint figure available.</p>") + "</div>"
             f"<p class='muted' style='margin-bottom:0'>{escape(profiling.interpretations.get('fingerprint_radar', ''))}</p>"
             "</div>"
             f"<div class='span-12'><div class='metrics'>{quality_cards}</div></div>"
@@ -555,7 +555,7 @@ class ReportGenerator:
             "<div class='panel span-7'>"
             "<div class='section-kicker'>Heatmap</div>"
             "<h3>Correlation Matrix</h3>"
-            f"<div class='figure'>{figures.get('correlation_heatmap', '<p class=\"muted\">No heatmap.</p>')}</div>"
+            "<div class='figure'>" + (figures.get('correlation_heatmap') or "<p class='muted'>No heatmap.</p>") + "</div>"
             "</div>"
             "<div class='panel span-5'>"
             "<div class='section-kicker'>Grouping</div>"
@@ -577,18 +577,18 @@ class ReportGenerator:
             "<div class='panel span-12'>"
             "<div class='section-kicker'>Distributions</div>"
             "<h3>Top Numeric Feature Distributions</h3>"
-            f"<div class='figure'>{figures.get('distribution_overview', '<p class=\"muted\">No distribution plots.</p>')}</div>"
+            "<div class='figure'>" + (figures.get('distribution_overview') or "<p class='muted'>No distribution plots.</p>") + "</div>"
             "</div>"
             "<div class='panel span-12'>"
             "<div class='section-kicker'>Grouped View</div>"
             "<h3>Numeric Shift Across A Low-Cardinality Group</h3>"
-            f"<div class='figure'>{figures.get('grouped_distributions', '<p class=\"muted\">No grouped distribution plot.</p>')}</div>"
+            "<div class='figure'>" + (figures.get('grouped_distributions') or "<p class='muted'>No grouped distribution plot.</p>") + "</div>"
             "</div>"
             "<div class='panel span-12'>"
             "<div class='section-kicker'>Feature–Target</div>"
             "<h3>Feature-Target Correlations</h3>"
             f"<div class='callout'>{escape(exploration.interpretations.get('feature_target_correlations', 'Not available.'))}</div>"
-            f"<div class='figure' style='margin-top:12px'>{figures.get('feature_target_correlations', '<p class=\"muted\">No feature-target correlation chart.</p>')}</div>"
+            "<div class='figure' style='margin-top:12px'>" + (figures.get('feature_target_correlations') or "<p class='muted'>No feature-target correlation chart.</p>") + "</div>"
             "</div>"
             "</div>"
         )
@@ -692,7 +692,7 @@ class ReportGenerator:
             "<div class='panel span-6'>"
             "<div class='section-kicker'>Variance</div>"
             "<h3>Scree Plot</h3>"
-            f"<div class='figure'>{figures.get('scree_plot', '<p class=\"muted\">No scree plot available.</p>')}</div>"
+            "<div class='figure'>" + (figures.get('scree_plot') or "<p class='muted'>No scree plot available.</p>") + "</div>"
             "</div>"
             "<div class='panel span-6'>"
             "<div class='section-kicker'>Projection</div>"
@@ -741,17 +741,17 @@ class ReportGenerator:
             "<div class='panel span-6'>"
             "<div class='section-kicker'>Latent Space</div>"
             "<h3>First Two Latent Dimensions</h3>"
-            f"<div class='figure'>{figures.get('latent_projection', '<p class=\"muted\">No latent projection available.</p>')}</div>"
+            "<div class='figure'>" + (figures.get('latent_projection') or "<p class='muted'>No latent projection available.</p>") + "</div>"
             "</div>"
             "<div class='panel span-6'>"
             "<div class='section-kicker'>Optimization</div>"
             "<h3>Training Loss</h3>"
-            f"<div class='figure'>{figures.get('training_loss', '<p class=\"muted\">No training-loss figure available.</p>')}</div>"
+            "<div class='figure'>" + (figures.get('training_loss') or "<p class='muted'>No training-loss figure available.</p>") + "</div>"
             "</div>"
             "<div class='panel span-12'>"
             "<div class='section-kicker'>Anomaly Signal</div>"
             "<h3>Reconstruction Error Distribution</h3>"
-            f"<div class='figure'>{figures.get('reconstruction_error', '<p class=\"muted\">No reconstruction-error figure available.</p>')}</div>"
+            "<div class='figure'>" + (figures.get('reconstruction_error') or "<p class='muted'>No reconstruction-error figure available.</p>") + "</div>"
             "</div>"
             "</div>"
         )
@@ -1205,12 +1205,12 @@ class ReportGenerator:
         # Cox table
         cox = out.get("cox_summary", []) or []
         cox_rows = "".join(
-            f"<tr{'style=\"font-weight:600\"' if r['significant'] else ''}>"
-            f"<td>{escape(r['covariate'])}</td>"
-            f"<td>{r['coef']:+.3f}</td>"
-            f"<td>{r['exp_coef']:.3f}</td>"
-            f"<td>{'<b>' if r['significant'] else ''}{r['p']:.3f}{'</b>' if r['significant'] else ''}</td>"
-            f"</tr>"
+            ('<tr style="font-weight:600">' if r['significant'] else '<tr>')
+            + f"<td>{escape(r['covariate'])}</td>"
+            + f"<td>{r['coef']:+.3f}</td>"
+            + f"<td>{r['exp_coef']:.3f}</td>"
+            + f"<td>{'<b>' if r['significant'] else ''}{r['p']:.3f}{'</b>' if r['significant'] else ''}</td>"
+            + "</tr>"
             for r in cox
         ) or "<tr><td colspan='4'>Cox PH model not fitted.</td></tr>"
 
@@ -1324,7 +1324,7 @@ class ReportGenerator:
             return "<p class='muted'>No confusion matrix available for this target.</p>"
         header = "".join(f"<th>{escape(label)}</th>" for label in labels)
         rows = []
-        for label, values in zip(labels, matrix):
+        for label, values in zip(labels, matrix, strict=False):
             cells = "".join(f"<td>{int(value)}</td>" for value in values)
             rows.append(f"<tr><th>{escape(label)}</th>{cells}</tr>")
         return (

@@ -226,7 +226,7 @@ def _main_run(args) -> int:
 # ---------------------------------------------------------------------------
 
 def _main_compare(args) -> int:
-    from explot.compare import load_report, diff_reports, diff_to_markdown
+    from explot.compare import diff_reports, diff_to_markdown, load_report
 
     for p in (args.report_a, args.report_b):
         if not p.exists():

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from explot.stages.base import StageResult
 from explot.stages.dimensionality.stage import DimensionalityStage

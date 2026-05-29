@@ -27,15 +27,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from explot.report.markdown import state_to_markdown
 from explot.stages.dimensionality.stage import DimensionalityStage
 from explot.stages.exploration.stage import ExplorationStage
 from explot.stages.findings.stage import FindingsStage
 from explot.stages.preprocessing.stage import PreprocessingStage
 from explot.stages.profiling.stage import ProfilingStage
 from explot.stages.supervised.stage import SupervisedStage
-from explot.report.markdown import state_to_markdown
 from explot.state import PipelineState
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -147,7 +146,7 @@ def test_verdict_escalates_for_severe_imbalance_without_sampling():
     Dataset is small (< 3000 rows) so no sampling occurs. The only escalation
     path available is the imbalance ratio check in _verdict.
     """
-    from explot.stages.base import StageResult, StageMeta
+    from explot.stages.base import StageMeta, StageResult
 
     # Simulate diagnostics for a 50:1 imbalanced target — no sampling
     fake_best = {
@@ -186,7 +185,7 @@ def test_verdict_escalates_for_severe_imbalance_without_sampling():
 
 def test_verdict_does_not_escalate_for_mild_imbalance():
     """Mild imbalance (< 20:1) must NOT trigger the severe-imbalance escalation."""
-    from explot.stages.base import StageResult, StageMeta
+    from explot.stages.base import StageMeta, StageResult
 
     fake_best = {
         "target": {

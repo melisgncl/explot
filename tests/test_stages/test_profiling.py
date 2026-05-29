@@ -4,8 +4,8 @@ from pathlib import Path
 
 from explot.config import load_config
 from explot.hooks import HookRegistry
-from explot.state import PipelineState
 from explot.stages.profiling.stage import ProfilingStage
+from explot.state import PipelineState
 
 
 def run_profiling_stage(df):

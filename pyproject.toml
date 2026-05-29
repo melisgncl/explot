@@ -73,3 +73,14 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"explot/report/generator.py" = ["E501"]
+"explot/stages/*.py" = ["E501"]
+"explot/stages/**/*.py" = ["E501", "B905"]
+"explot/batch.py" = ["E501"]
+"explot/cli.py" = ["E501"]
+"explot/compare.py" = ["E501"]
+"explot/orchestrator.py" = ["E501"]
+"explot/report/markdown.py" = ["E501"]
+"tests/**/*.py" = ["E501"]

@@ -5,21 +5,28 @@ import warnings
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
+from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LogisticRegression, Ridge
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import (
     GroupKFold,
     KFold,
     StratifiedKFold,
     TimeSeriesSplit,
-    cross_validate,
     cross_val_predict,
+    cross_validate,
 )
 from sklearn.pipeline import Pipeline as SklearnPipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.svm import SVC, SVR
 
 from explot.stages.base import BaseStage, StageMeta, StageResult

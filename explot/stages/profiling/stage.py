@@ -98,7 +98,6 @@ class ProfilingStage(BaseStage):
                             "This may indicate mixed data types requiring cleanup."
                         ),
                     })
-            column_name = str(column).lower()
             if (
                 role_guess == "id_like"
                 and len(df)

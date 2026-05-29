@@ -1,8 +1,6 @@
 """Tests for Phase 3 features: survival stage, model export, UMAP, Plotly chart."""
 from __future__ import annotations
 
-import json
-import math
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -152,8 +150,8 @@ class TestSurvivalStageDetection:
 
 class TestModelExport:
     def _make_supervised_result(self, with_estimator=True):
-        from sklearn.ensemble import RandomForestClassifier
         from sklearn.datasets import make_classification
+        from sklearn.ensemble import RandomForestClassifier
 
         X, y = make_classification(n_samples=100, n_features=5, random_state=0)
         clf = RandomForestClassifier(n_estimators=5, random_state=0).fit(X, y)
@@ -175,7 +173,6 @@ class TestModelExport:
     def test_save_best_model_creates_file(self, tmp_path):
         pytest.importorskip("joblib")
         from explot.orchestrator import _save_best_model
-        from explot.state import PipelineState
 
         state = MagicMock()
         state.results = {"supervised": self._make_supervised_result(with_estimator=True)}
@@ -189,7 +186,6 @@ class TestModelExport:
         import joblib
         pytest.importorskip("joblib")
         from explot.orchestrator import _save_best_model
-        from explot.state import PipelineState
 
         state = MagicMock()
         state.results = {"supervised": self._make_supervised_result(with_estimator=True)}
@@ -363,10 +359,10 @@ class TestPlotlyFeatureImportanceChart:
 
     def test_plotly_script_in_head(self):
         """The HTML report template must include Plotly CDN in <head>."""
-        from pathlib import Path
+
+        from explot.config import load_config
         from explot.report.generator import ReportGenerator
         from explot.state import PipelineState
-        from explot.config import load_config
 
         _ROOT = Path(__file__).resolve().parent.parent
         config = load_config(_ROOT / "config" / "fast.yaml")

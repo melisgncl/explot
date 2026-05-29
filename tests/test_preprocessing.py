@@ -3,13 +3,11 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from explot.stages.findings.stage import FindingsStage
 from explot.stages.preprocessing.stage import PreprocessingStage
 from explot.stages.profiling.stage import ProfilingStage
 from explot.state import PipelineState
-
 
 # ---------------------------------------------------------------------------
 # Minimal pipeline helpers
@@ -168,6 +166,7 @@ def test_categorical_nan_imputed_with_mode():
 
 def test_linear_models_wrapped_in_pipeline():
     from sklearn.pipeline import Pipeline as SklearnPipeline
+
     from explot.stages.supervised.stage import SupervisedStage
     stage = SupervisedStage()
     models = dict(stage._build_models(is_clf=True, is_fast=True, n_rows=100))
@@ -179,6 +178,7 @@ def test_linear_models_wrapped_in_pipeline():
 
 def test_ridge_regression_wrapped_in_pipeline():
     from sklearn.pipeline import Pipeline as SklearnPipeline
+
     from explot.stages.supervised.stage import SupervisedStage
     stage = SupervisedStage()
     models = dict(stage._build_models(is_clf=False, is_fast=True, n_rows=100))
@@ -192,8 +192,8 @@ def test_ridge_regression_wrapped_in_pipeline():
 # ---------------------------------------------------------------------------
 
 def test_heavy_imputation_produces_high_finding():
-    from explot.stages.exploration.stage import ExplorationStage
     from explot.stages.dimensionality.stage import DimensionalityStage
+    from explot.stages.exploration.stage import ExplorationStage
     rng = np.random.default_rng(7)
     n = 100
     sparse = rng.normal(size=n).astype(object)
@@ -214,8 +214,8 @@ def test_heavy_imputation_produces_high_finding():
 
 
 def test_high_cardinality_drop_produces_high_finding():
-    from explot.stages.exploration.stage import ExplorationStage
     from explot.stages.dimensionality.stage import DimensionalityStage
+    from explot.stages.exploration.stage import ExplorationStage
     rng = np.random.default_rng(8)
     n = 200
     # 'city' is not an id-like name, so profiling won't skip it before the cardinality check
@@ -240,7 +240,7 @@ def test_high_cardinality_drop_produces_high_finding():
 
 def test_verdict_investigates_near_baseline_model():
     """A model that barely beats baseline should trigger INVESTIGATE."""
-    from explot.stages.base import StageResult, StageMeta
+    from explot.stages.base import StageMeta, StageResult
     # Construct a fake supervised result where score ≈ baseline
     fake_best_models = {
         "target": {
@@ -268,7 +268,7 @@ def test_verdict_investigates_near_baseline_model():
 
 def test_verdict_investigates_when_data_was_sampled():
     """Sampling note should escalate a clean SHIP to INVESTIGATE."""
-    from explot.stages.base import StageResult, StageMeta
+    from explot.stages.base import StageMeta, StageResult
     fake_best_models = {
         "target": {
             "model": "RandomForest",
@@ -301,8 +301,8 @@ def test_verdict_investigates_when_data_was_sampled():
 def test_titanic_like_categorical_features_reach_model():
     """Sex and Embarked (categorical) must appear as features and improve score
     over a numeric-only baseline."""
-    from explot.stages.exploration.stage import ExplorationStage
     from explot.stages.dimensionality.stage import DimensionalityStage
+    from explot.stages.exploration.stage import ExplorationStage
     from explot.stages.supervised.stage import SupervisedStage
 
     rng = np.random.default_rng(42)

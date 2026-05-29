@@ -11,8 +11,8 @@ from explot.config import AppConfig
 from explot.hooks import HookRegistry
 from explot.loader import load_table
 from explot.report.generator import ReportGenerator
-from explot.state import PipelineState
 from explot.stages.base import StageMeta, StageResult
+from explot.state import PipelineState
 
 
 def _save_best_model(state, model_path: Path) -> None:

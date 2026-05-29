@@ -7,9 +7,9 @@ import pandas as pd
 
 from explot.config import load_config
 from explot.hooks import HookRegistry
-from explot.state import PipelineState
 from explot.stages.exploration.stage import ExplorationStage
 from explot.stages.profiling.stage import ProfilingStage
+from explot.state import PipelineState
 
 
 def run_exploration_stage(df):

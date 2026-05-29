@@ -8,7 +8,8 @@ import pandas as pd
 try:
     import torch
     from torch.utils.data import DataLoader, TensorDataset
-    from explot.models.dvae import DVAETrainingConfig, DenoisingVAE, dvae_loss
+
+    from explot.models.dvae import DenoisingVAE, DVAETrainingConfig, dvae_loss
     _HAS_TORCH = True
 except ImportError:
     _HAS_TORCH = False

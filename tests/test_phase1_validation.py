@@ -17,7 +17,6 @@ Cross-cutting
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -28,7 +27,6 @@ from explot.stages.preprocessing.stage import PreprocessingStage
 from explot.stages.profiling.stage import ProfilingStage
 from explot.stages.supervised.stage import SupervisedStage
 from explot.state import PipelineState
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -242,7 +240,7 @@ def test_adult_preprocessing_encodes_categoricals(adult_df):
 
 def test_verdict_floor_on_near_random_model():
     """A model that barely beats baseline (score ≈ baseline + 0.02) must get INVESTIGATE."""
-    from explot.stages.base import StageResult, StageMeta
+    from explot.stages.base import StageMeta, StageResult
 
     fake_best = {
         "target": {
@@ -269,7 +267,7 @@ def test_verdict_floor_on_near_random_model():
 
 def test_verdict_sampling_note_escalates_ship():
     """A clean high-scoring model with a sampling note must still get INVESTIGATE."""
-    from explot.stages.base import StageResult, StageMeta
+    from explot.stages.base import StageMeta, StageResult
 
     fake_best = {
         "target": {

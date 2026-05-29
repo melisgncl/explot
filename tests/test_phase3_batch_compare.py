@@ -10,9 +10,8 @@ import pytest
 
 from explot.batch import collect_paths, run_batch, write_index
 from explot.cli import main
-from explot.compare import diff_reports, diff_to_markdown, load_report
+from explot.compare import diff_reports, diff_to_markdown
 from explot.config import load_config
-
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
@@ -114,7 +113,7 @@ def test_run_batch_json_format(workspace_tmp_path):
         _make_csv(data_dir / f"ds{i}.csv", seed=i)
 
     paths = collect_paths(str(data_dir))
-    results = run_batch(paths, out_dir, _config(), verbose=False, output_format="json")
+    run_batch(paths, out_dir, _config(), verbose=False, output_format="json")
     json_files = list(out_dir.glob("*.json"))
     assert len(json_files) == 2
     # Verify parseable JSON
