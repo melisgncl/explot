@@ -40,9 +40,6 @@ dev = [
   "umap-learn>=0.5",
   "lifelines>=0.27",
 ]
-report = [
-  "plotly>=5.20",
-]
 excel = [
   "openpyxl>=3.1",
 ]

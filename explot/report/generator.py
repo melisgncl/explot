@@ -326,7 +326,7 @@ class ReportGenerator:
       <div class="hero-card">
         <p class="eyebrow">Explot Report</p>
         <h1>{title}</h1>
-        <p class="lede">A self-contained analysis snapshot spanning profiling, exploration, dimensionality reduction, unsupervised probes, supervised model selection, and synthesized findings.</p>
+        <p class="lede">A trust-aware analysis snapshot spanning profiling, exploration, preprocessing, dimensionality reduction (PCA + UMAP), unsupervised probes, supervised model selection with SHAP, survival analysis, and synthesized findings.</p>
         {sampling_badge}
       </div>
       <div class="summary-card">

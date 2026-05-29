@@ -17,6 +17,8 @@ _tmp_test_cases/
 _tmp*/
 *.state.pkl
 *.so
+*.joblib
+data/nyc_taxi_yellow_2024_01.parquet
 .DS_Store
 Thumbs.db
 simulator/output/

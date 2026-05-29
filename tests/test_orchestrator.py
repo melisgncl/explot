@@ -19,4 +19,4 @@ def test_pipeline_runs_profiling_and_writes_report(workspace_tmp_path: Path) -> 
     assert report_path.exists()
     report_text = report_path.read_text(encoding="utf-8")
     assert "Explot Report" in report_text
-    assert "profiling, exploration, dimensionality reduction" in report_text
+    assert "profiling, exploration" in report_text

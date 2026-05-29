@@ -2,10 +2,12 @@ pipeline:
   enabled_stages:
     - profiling
     - exploration
+    - preprocessing
     - dimensionality
     - autoencoder
     - unsupervised
     - supervised
+    - survival
     - findings
   fail_fast: false
   cache_state: false
