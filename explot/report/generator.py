@@ -487,8 +487,8 @@ class ReportGenerator:
             "<div class='panel span-4'>"
             "<div class='section-kicker'>Fingerprint</div>"
             "<h3>Radar View</h3>"
-            "<div class='figure'>" + (fingerprint_svg or "<p class='muted'>No fingerprint figure available.</p>") + "</div>"
-            f"<p class='muted' style='margin-bottom:0'>{escape(profiling.interpretations.get('fingerprint_radar', ''))}</p>"
+            + self._figure(fingerprint_svg, "No fingerprint figure available.")
+            + f"<p class='muted' style='margin-bottom:0'>{escape(profiling.interpretations.get('fingerprint_radar', ''))}</p>"
             "</div>"
             f"<div class='span-12'><div class='metrics'>{quality_cards}</div></div>"
             "<div class='panel span-12'>"
@@ -555,8 +555,8 @@ class ReportGenerator:
             "<div class='panel span-7'>"
             "<div class='section-kicker'>Heatmap</div>"
             "<h3>Correlation Matrix</h3>"
-            "<div class='figure'>" + (figures.get('correlation_heatmap') or "<p class='muted'>No heatmap.</p>") + "</div>"
-            "</div>"
+            + self._figure(figures.get('correlation_heatmap'), "No heatmap.")
+            + "</div>"
             "<div class='panel span-5'>"
             "<div class='section-kicker'>Grouping</div>"
             "<h3>Low-Cardinality Candidates</h3>"
@@ -577,19 +577,19 @@ class ReportGenerator:
             "<div class='panel span-12'>"
             "<div class='section-kicker'>Distributions</div>"
             "<h3>Top Numeric Feature Distributions</h3>"
-            "<div class='figure'>" + (figures.get('distribution_overview') or "<p class='muted'>No distribution plots.</p>") + "</div>"
-            "</div>"
+            + self._figure(figures.get('distribution_overview'), "No distribution plots.")
+            + "</div>"
             "<div class='panel span-12'>"
             "<div class='section-kicker'>Grouped View</div>"
             "<h3>Numeric Shift Across A Low-Cardinality Group</h3>"
-            "<div class='figure'>" + (figures.get('grouped_distributions') or "<p class='muted'>No grouped distribution plot.</p>") + "</div>"
-            "</div>"
+            + self._figure(figures.get('grouped_distributions'), "No grouped distribution plot.")
+            + "</div>"
             "<div class='panel span-12'>"
             "<div class='section-kicker'>Feature–Target</div>"
             "<h3>Feature-Target Correlations</h3>"
             f"<div class='callout'>{escape(exploration.interpretations.get('feature_target_correlations', 'Not available.'))}</div>"
-            "<div class='figure' style='margin-top:12px'>" + (figures.get('feature_target_correlations') or "<p class='muted'>No feature-target correlation chart.</p>") + "</div>"
-            "</div>"
+            + self._figure(figures.get('feature_target_correlations'), "No feature-target correlation chart.", style="margin-top:12px")
+            + "</div>"
             "</div>"
         )
 
@@ -692,8 +692,8 @@ class ReportGenerator:
             "<div class='panel span-6'>"
             "<div class='section-kicker'>Variance</div>"
             "<h3>Scree Plot</h3>"
-            "<div class='figure'>" + (figures.get('scree_plot') or "<p class='muted'>No scree plot available.</p>") + "</div>"
-            "</div>"
+            + self._figure(figures.get('scree_plot'), "No scree plot available.")
+            + "</div>"
             "<div class='panel span-6'>"
             "<div class='section-kicker'>Projection</div>"
             + self._projection_plotly_chart(outputs)
@@ -738,21 +738,21 @@ class ReportGenerator:
             + self._metric_card("Recon MSE", str(outputs.get("reconstruction_mse", "n/a")), "Lower is better")
             + self._metric_card("Fit Rows", str(outputs.get("fit_rows", 0)), "Rows used during training")
             + "</div>"
-            "<div class='panel span-6'>"
+            + "<div class='panel span-6'>"
             "<div class='section-kicker'>Latent Space</div>"
             "<h3>First Two Latent Dimensions</h3>"
-            "<div class='figure'>" + (figures.get('latent_projection') or "<p class='muted'>No latent projection available.</p>") + "</div>"
-            "</div>"
+            + self._figure(figures.get('latent_projection'), "No latent projection available.")
+            + "</div>"
             "<div class='panel span-6'>"
             "<div class='section-kicker'>Optimization</div>"
             "<h3>Training Loss</h3>"
-            "<div class='figure'>" + (figures.get('training_loss') or "<p class='muted'>No training-loss figure available.</p>") + "</div>"
-            "</div>"
+            + self._figure(figures.get('training_loss'), "No training-loss figure available.")
+            + "</div>"
             "<div class='panel span-12'>"
             "<div class='section-kicker'>Anomaly Signal</div>"
             "<h3>Reconstruction Error Distribution</h3>"
-            "<div class='figure'>" + (figures.get('reconstruction_error') or "<p class='muted'>No reconstruction-error figure available.</p>") + "</div>"
-            "</div>"
+            + self._figure(figures.get('reconstruction_error'), "No reconstruction-error figure available.")
+            + "</div>"
             "</div>"
         )
 
@@ -842,24 +842,16 @@ class ReportGenerator:
             is_regression = best.get("metric", "") == "R2"
             if is_regression:
                 table_header = "<th>Model</th><th>R2</th>"
-                def _model_row(r):
-                    return f"<tr><td>{escape(r['model'])}</td><td>{r['mean']:.4f} +/- {r['std']:.4f}</td></tr>"
                 empty_colspan = 2
             else:
                 table_header = "<th>Model</th><th>F1 (macro)</th><th>Precision</th><th>Recall</th><th>Accuracy</th><th>ROC AUC</th>"
-                def _model_row(r):
-                    return (
-                        f"<tr><td>{escape(r['model'])}</td><td>{r['mean']:.4f} +/- {r['std']:.4f}</td>"
-                        f"<td>{r.get('precision_macro', 'n/a')}</td><td>{r.get('recall_macro', 'n/a')}</td>"
-                        f"<td>{r.get('accuracy', 'n/a')}</td><td>{r.get('roc_auc', 'n/a')}</td></tr>"
-                    )
                 empty_colspan = 6
 
             rows_a = "".join(
-                _model_row(r) for r in sorted(results_a, key=lambda x: -x["mean"])
+                self._model_row(r, is_regression) for r in sorted(results_a, key=lambda x: -x["mean"])
             ) or f"<tr><td colspan='{empty_colspan}'>Track A unavailable.</td></tr>"
             rows_b = "".join(
-                _model_row(r) for r in sorted(results_b, key=lambda x: -x["mean"])
+                self._model_row(r, is_regression) for r in sorted(results_b, key=lambda x: -x["mean"])
             ) or f"<tr><td colspan='{empty_colspan}'>Track B unavailable.</td></tr>"
 
             fi_chart_html = self._fi_with_dropdown(
@@ -1333,6 +1325,22 @@ class ReportGenerator:
             + "</tr></thead><tbody>"
             + "".join(rows)
             + "</tbody></table></div>"
+        )
+
+    def _figure(self, content: str | None, fallback: str = "No figure available.", *, style: str = "") -> str:
+        style_attr = f" style='{style}'" if style else ""
+        inner = content if content else f"<p class='muted'>{escape(fallback)}</p>"
+        return f"<div class='figure'{style_attr}>{inner}</div>"
+
+    @staticmethod
+    def _model_row(r: dict, is_regression: bool) -> str:
+        base = f"<tr><td>{escape(r['model'])}</td><td>{r['mean']:.4f} +/- {r['std']:.4f}</td>"
+        if is_regression:
+            return base + "</tr>"
+        return (
+            base
+            + f"<td>{r.get('precision_macro', 'n/a')}</td><td>{r.get('recall_macro', 'n/a')}</td>"
+            + f"<td>{r.get('accuracy', 'n/a')}</td><td>{r.get('roc_auc', 'n/a')}</td></tr>"
         )
 
     def _role_counts(self, column_profiles: dict[str, dict[str, object]]) -> dict[str, int]:
