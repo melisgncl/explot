@@ -7,6 +7,8 @@ import pandas as pd
 
 from explot.stages.base import BaseStage, StageMeta, StageResult
 
+_REDUNDANT_PAIR_THRESHOLD = 0.95
+
 
 class ExplorationStage(BaseStage):
     meta = StageMeta(name="exploration", depends_on=("profiling",))
@@ -90,7 +92,7 @@ class ExplorationStage(BaseStage):
                 value = correlation_matrix[left][right]
                 if value is None:
                     continue
-                if abs(value) > 0.95:
+                if abs(value) > _REDUNDANT_PAIR_THRESHOLD:
                     pairs.append({"columns": [left, right], "correlation": round(float(value), 4)})
         pairs.sort(key=lambda item: abs(item["correlation"]), reverse=True)
         return pairs
@@ -359,6 +361,19 @@ class ExplorationStage(BaseStage):
 
     # ---- Feature-target correlation ----
 
+    def _identify_target_columns(self, df: pd.DataFrame, profiling, state) -> list[str]:
+        """Return candidate target columns from explicit state flag or profiling heuristics."""
+        if hasattr(state, "target_column") and state.target_column and state.target_column in df.columns:
+            return [state.target_column]
+        cat_cols = profiling.outputs.get("categorical_column_names", []) if profiling.success else []
+        targets: list[str] = []
+        for col in cat_cols:
+            if 2 <= df[col].nunique() <= 20:
+                targets.append(col)
+                if len(targets) >= 3:
+                    break
+        return targets
+
     def _feature_target_correlations(
         self,
         df: pd.DataFrame,
@@ -367,19 +382,7 @@ class ExplorationStage(BaseStage):
         state,
     ) -> list[dict[str, object]]:
         """Compute correlation between each numeric feature and candidate targets."""
-        # Identify target columns: explicit from state, or auto-detect from profiling
-        target_cols: list[str] = []
-        if hasattr(state, "target_column") and state.target_column and state.target_column in df.columns:
-            target_cols = [state.target_column]
-        else:
-            # Use profiling heuristics: categorical with 2-20 unique values
-            cat_cols = profiling.outputs.get("categorical_column_names", []) if profiling.success else []
-            for col in cat_cols:
-                if 2 <= df[col].nunique() <= 20:
-                    target_cols.append(col)
-                    if len(target_cols) >= 3:
-                        break
-
+        target_cols = self._identify_target_columns(df, profiling, state)
         if not target_cols or numeric_df.empty:
             return []
 
