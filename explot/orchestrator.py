@@ -100,7 +100,7 @@ class Pipeline:
                     break
                 continue
 
-            hooks.stage_started(stage_name)
+            hooks.stage_started(stage_name, phase=entry.get("phase", ""))
             try:
                 result = stage.run(state, self.config, hooks)
             except Exception as exc:

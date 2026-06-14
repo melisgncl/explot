@@ -1,31 +1,38 @@
 stages:
   - name: profiling
+    phase: Profile
     module: explot.stages.profiling.stage
     class_name: ProfilingStage
     optional_deps: []
   - name: exploration
+    phase: Profile
     module: explot.stages.exploration.stage
     class_name: ExplorationStage
     optional_deps: []
   - name: preprocessing
+    phase: Model
     module: explot.stages.preprocessing.stage
     class_name: PreprocessingStage
     optional_deps: []
   - name: dimensionality
+    phase: Model
     module: explot.stages.dimensionality.stage
     class_name: DimensionalityStage
     optional_deps:
       - preprocessing
   - name: autoencoder
+    phase: Model
     module: explot.stages.autoencoder.stage
     class_name: AutoencoderStage
     optional_deps: []
   - name: unsupervised
+    phase: Model
     module: explot.stages.unsupervised.stage
     class_name: UnsupervisedStage
     optional_deps:
       - exploration
   - name: supervised
+    phase: Model
     module: explot.stages.supervised.stage
     class_name: SupervisedStage
     optional_deps:
@@ -33,11 +40,13 @@ stages:
       - preprocessing
       - unsupervised
   - name: survival
+    phase: Synthesize
     module: explot.stages.survival.stage
     class_name: SurvivalStage
     optional_deps:
       - preprocessing
   - name: findings
+    phase: Synthesize
     module: explot.stages.findings.stage
     class_name: FindingsStage
     optional_deps:

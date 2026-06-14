@@ -7,12 +7,16 @@ from time import perf_counter
 _STAGE_LABELS = {
     "profiling": "Profiling",
     "exploration": "Exploration",
+    "preprocessing": "Preprocessing",
     "dimensionality": "Dimensionality",
     "autoencoder": "DVAE Autoencoder",
     "unsupervised": "Unsupervised",
     "supervised": "Model Selection",
+    "survival": "Survival Analysis",
     "findings": "Findings",
 }
+
+_PHASES = ("Profile", "Model", "Synthesize")
 
 
 @dataclass
@@ -22,6 +26,7 @@ class HookRegistry:
     logs: list[dict[str, str]] = field(default_factory=list)
     _timers: dict[str, float] = field(default_factory=dict)
     _pipeline_start: float = 0.0
+    _current_phase: str = ""
 
     def progress(self, stage: str, percent: int, message: str = "") -> None:
         self.logs.append(
@@ -37,10 +42,15 @@ class HookRegistry:
     def pipeline_started(self) -> None:
         self._pipeline_start = perf_counter()
 
-    def stage_started(self, stage: str) -> None:
+    def stage_started(self, stage: str, phase: str = "") -> None:
         self._timers[stage] = perf_counter()
         self.log(stage, "Stage started.")
         if self.verbose:
+            if phase and phase != self._current_phase:
+                self._current_phase = phase
+                idx = _PHASES.index(phase) + 1 if phase in _PHASES else "?"
+                header = f"── Phase {idx}/{len(_PHASES)}: {phase} "
+                print(f"\n{header}{'─' * max(1, 48 - len(header))}", file=sys.stderr)
             label = _STAGE_LABELS.get(stage, stage)
             print(f"  [{label}] running...", end="", flush=True, file=sys.stderr)
 
