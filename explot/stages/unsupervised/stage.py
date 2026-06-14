@@ -59,7 +59,6 @@ class UnsupervisedStage(BaseStage):
         # --- Isolation Forest ---
         iso_scores, anomaly_rows = self._isolation_forest(X)
         dvae_anomaly_rows = []
-        autoencoder = state.results.get("autoencoder")
         if autoencoder and autoencoder.success:
             dvae_anomaly_rows = self._dvae_anomaly_rows(autoencoder.outputs.get("reconstruction_errors", []))
 
