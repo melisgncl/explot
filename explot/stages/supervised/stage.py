@@ -37,6 +37,12 @@ _REGRESSION_KEYWORDS = {
     "response", "expression", "concentration", "ic50", "ec50", "dose",
     "yield", "output", "result", "measure", "index", "ratio",
 }
+_TREE_TYPES = frozenset((
+    "RandomForestClassifier", "RandomForestRegressor",
+    "XGBClassifier", "XGBRegressor",
+    "LGBMClassifier", "LGBMRegressor",
+))
+_LINEAR_TYPES = frozenset(("LogisticRegression", "Ridge"))
 
 
 def _try_import_xgboost():
@@ -702,9 +708,8 @@ class SupervisedStage(BaseStage):
             trust_flags.append("high_correlation_proxy")
         if suspicious_name_columns:
             trust_flags.append("suspicious_feature_name")
-        if is_classification and best_score >= 0.95:
-            trust_flags.append("near_perfect_score")
-        if not is_classification and best_score >= 0.99:
+        near_perfect_threshold = 0.95 if is_classification else 0.99
+        if best_score >= near_perfect_threshold:
             trust_flags.append("near_perfect_score")
         if best_score >= 0.9 and (exact_copy_columns or deterministic_proxy_columns or high_corr_proxy_columns):
             trust_flags.append("possible_leakage")
@@ -1016,6 +1021,14 @@ class SupervisedStage(BaseStage):
         except Exception:
             return []
 
+    @staticmethod
+    def _unwrap_pipeline(fitted, X: np.ndarray) -> tuple:
+        """Return (inner_estimator, X_transformed) by stripping any sklearn Pipeline wrapper."""
+        if hasattr(fitted, "named_steps"):
+            steps = list(fitted.named_steps.keys())
+            return fitted.named_steps[steps[-1]], fitted[:-1].transform(X)
+        return fitted, X
+
     def _shap_importance(self, estimator, X, y, is_clf: bool, col_names: list[str]) -> list[dict]:
         """SHAP-based feature importance. Returns top-10 by mean |SHAP|."""
         try:
@@ -1026,19 +1039,7 @@ class SupervisedStage(BaseStage):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 fitted = clone(estimator).fit(X, y)
-            # Unwrap sklearn Pipeline to get underlying estimator for explainer selection
-            inner = fitted
-            if hasattr(fitted, "named_steps"):
-                step_names = list(fitted.named_steps.keys())
-                inner = fitted.named_steps[step_names[-1]]
-                X_transformed = fitted[:-1].transform(X)
-            else:
-                X_transformed = X
-
-            tree_types = ("RandomForestClassifier", "RandomForestRegressor",
-                          "XGBClassifier", "XGBRegressor",
-                          "LGBMClassifier", "LGBMRegressor")
-            linear_types = ("LogisticRegression", "Ridge")
+            inner, X_transformed = self._unwrap_pipeline(fitted, X)
             type_name = type(inner).__name__
 
             sample_size = min(500, len(X_transformed))
@@ -1048,15 +1049,14 @@ class SupervisedStage(BaseStage):
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                if type_name in tree_types:
+                if type_name in _TREE_TYPES:
                     explainer = shap.TreeExplainer(inner)
                     shap_values = explainer.shap_values(X_sample)
-                elif type_name in linear_types:
+                elif type_name in _LINEAR_TYPES:
                     background = shap.maskers.Independent(X_transformed, max_samples=min(50, len(X_transformed)))
                     explainer = shap.LinearExplainer(inner, background)
                     shap_values = explainer.shap_values(X_sample)
                 else:
-                    # Fallback: permutation-based
                     return []
 
             # Normalise shap_values to (n_samples, n_features):
@@ -1097,24 +1097,14 @@ class SupervisedStage(BaseStage):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 fitted = clone(estimator).fit(X, y)
-            inner = fitted
-            X_transformed = X
-            if hasattr(fitted, "named_steps"):
-                step_names = list(fitted.named_steps.keys())
-                inner = fitted.named_steps[step_names[-1]]
-                X_transformed = fitted[:-1].transform(X)
-
-            tree_types = ("RandomForestClassifier", "RandomForestRegressor",
-                          "XGBClassifier", "XGBRegressor",
-                          "LGBMClassifier", "LGBMRegressor")
-            linear_types = ("LogisticRegression", "Ridge")
+            inner, X_transformed = self._unwrap_pipeline(fitted, X)
             type_name = type(inner).__name__
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                if type_name in tree_types:
+                if type_name in _TREE_TYPES:
                     explainer = shap.TreeExplainer(inner)
-                elif type_name in linear_types:
+                elif type_name in _LINEAR_TYPES:
                     background = shap.maskers.Independent(X_transformed, max_samples=min(50, len(X_transformed)))
                     explainer = shap.LinearExplainer(inner, background)
                 else:
@@ -1201,16 +1191,11 @@ class SupervisedStage(BaseStage):
             rf.fit(X, y)
             importances = rf.feature_importances_
             indices = np.argsort(importances)[::-1][:10]
-            ranked = [
-                {"feature": col_names[i] if i < len(col_names) else f"feature_{i}", "importance": round(float(importances[i]), 4)}
-                for i in indices if importances[i] > 0
-            ]
-            if ranked:
-                return ranked
-            return [
+            all_ranked = [
                 {"feature": col_names[i] if i < len(col_names) else f"feature_{i}", "importance": round(float(importances[i]), 4)}
                 for i in indices
             ]
+            return [r for r in all_ranked if r["importance"] > 0] or all_ranked
         except Exception:
             return []
 
