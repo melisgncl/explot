@@ -331,8 +331,6 @@ class ProfilingStage(BaseStage):
             sample_skew = summary.get("skew") if isinstance(summary, dict) else None
             sample_skew = 0.0 if sample_skew is None else float(sample_skew)
 
-            if id_name_hint and (uniqueness_ratio >= 0.98 or cardinality >= max(20, int(n_rows * 0.01))):
-                return "id_like"
             if uniqueness_ratio >= 0.995 and is_integer_like and not self._looks_measurement_like(lowered):
                 return "id_like"
             if unique_values == 2:
@@ -347,8 +345,6 @@ class ProfilingStage(BaseStage):
                 return "count_like"
             return "continuous_measurement"
 
-        if uniqueness_ratio >= 0.98 and id_name_hint:
-            return "id_like"
         return "categorical_text"
 
     def _looks_measurement_like(self, column_name: str) -> bool:
