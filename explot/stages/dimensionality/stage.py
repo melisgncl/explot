@@ -40,12 +40,7 @@ class DimensionalityStage(BaseStage):
                 "(numeric + encoded categoricals)."
             )
             # Apply redundant-pair filtering to any original columns that survived encoding
-            redundant_to_drop: set[str] = set()
-            for pair in redundant_pairs:
-                cols = pair.get("columns", [])
-                if len(cols) == 2 and cols[1] in numeric_cols and cols[1] not in redundant_to_drop:
-                    redundant_to_drop.add(cols[1])
-            for name in sorted(redundant_to_drop):
+            for name in sorted(self._collect_redundant(redundant_pairs, numeric_cols)):
                 numeric_cols.remove(name)
                 cleaned = cleaned.drop(columns=[name])
                 dropped_columns.append({"name": name, "reason": "redundant"})
@@ -72,12 +67,7 @@ class DimensionalityStage(BaseStage):
                     dropped_columns.append({"name": name, "reason": reason})
                     transform_log.append(f"Dropped '{name}' (flagged as {reason} by profiling).")
 
-            redundant_to_drop = set()
-            for pair in redundant_pairs:
-                cols = pair.get("columns", [])
-                if len(cols) == 2 and cols[1] in numeric_cols and cols[1] not in redundant_to_drop:
-                    redundant_to_drop.add(cols[1])
-            for name in sorted(redundant_to_drop):
+            for name in sorted(self._collect_redundant(redundant_pairs, numeric_cols)):
                 if name in numeric_cols:
                     numeric_cols.remove(name)
                     dropped_columns.append({"name": name, "reason": "redundant"})
@@ -223,6 +213,14 @@ class DimensionalityStage(BaseStage):
         )
 
     # ------------------------------------------------------------------
+    def _collect_redundant(self, redundant_pairs: list, numeric_cols: list) -> set[str]:
+        result: set[str] = set()
+        for pair in redundant_pairs:
+            cols = pair.get("columns", [])
+            if len(cols) == 2 and cols[1] in numeric_cols and cols[1] not in result:
+                result.add(cols[1])
+        return result
+
     def _participation_ratio(self, eigenvalues: np.ndarray) -> int:
         ev = eigenvalues[eigenvalues > 0]
         if len(ev) == 0:
