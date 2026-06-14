@@ -7,9 +7,22 @@
 
 **[Live Demo](https://melisgncl.github.io/explot/)** · [Credit Card Fraud Report](https://melisgncl.github.io/explot/reports/creditcard_fraud_report.html) · [Telco Churn Report](https://melisgncl.github.io/explot/reports/telco_churn_report.html)
 
-Automated first-pass analyst for tabular data — one CSV in, one trust-aware report out.
+![Explot report preview](docs/images/explot-demo-preview.svg)
+<!-- replace with real PNG screenshot when available -->
 
-Most profiling tools stop at column summaries. Explot goes further: it profiles your data, checks for structure, runs unsupervised and supervised probes (both classification and regression), **recommends which ML model fits**, and flags potential leakage — all in a single command.
+**You have a dataset and don't know where to start.** Which model fits? Which features matter? Is there even structure worth modeling — and can you trust the result? Explot is a first-pass triage that answers those questions from a single CSV, before you commit to an analysis plan.
+
+Profilers (ydata-profiling, sweetviz) *describe* your data and stop. AutoML tools (PyCaret, FLAML) jump straight to *training* — and will happily hand you a leaked 0.99 model. Explot sits in the gap between them: it orients you (is there structure? which features matter? which model fits?) **and** gates the recommendation with trust flags, so a strong score is a signal you can act on instead of a trap.
+
+```
+profile  →  probe  →  trust
+describe    which model      can I believe
+the data    & features fit   the score?
+```
+
+## Why I Built This
+
+Working with biological and tabular datasets, I kept hitting the same wall: a new dataset lands, and before any real analysis you have to spend hours answering the same setup questions — is there structure, which features carry signal, which model is even appropriate, and is that suspiciously good score real or leakage? Explot automates that first pass into one command, so the hours go into the actual analysis instead of the orientation.
 
 ## How Explot Compares
 
@@ -108,7 +121,7 @@ Explot runs 9 stages, each building on the last:
 | **Exploration** | Redundant feature pairs, cluster tendency (Hopkins), missingness patterns, outliers |
 | **Preprocessing** | Median imputation, ordinal/frequency encoding, drops ID/timestamp columns |
 | **Dimensionality** | PCA variance decomposition, intrinsic dimensionality estimate, scree plot |
-| **DVAE** | Nonlinear compression via denoising VAE — compared against PCA to measure nonlinear structure |
+| **DVAE** | Nonlinear compression via denoising VAE, compared against PCA. *Only runs on high-dimensional data (≥12 features) — on low-dimensional tables PCA + a tree model capture the same structure, so it's skipped automatically. Its real home is omics-scale data.* |
 | **Unsupervised** | KMeans sweep, DBSCAN auto-tuning, Isolation Forest anomaly detection, multi-signal consensus |
 | **Model Selection** | Auto-detects classification and regression targets, runs cross-validated probes with SHAP importance, recommends the best model |
 | **Survival** | Kaplan-Meier curves and Cox PH model when time + event columns are detected (requires `lifelines`) |
