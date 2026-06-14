@@ -241,21 +241,21 @@ class SurvivalStage(BaseStage):
         ]
 
         # If preprocessing ran, also include ordinal-encoded columns
+        prep_df = None
         preprocessing = state.results.get("preprocessing")
         if preprocessing and preprocessing.success:
             prep_df = preprocessing.outputs.get("preprocessed_df")
-            if prep_df is not None:
-                encoded_cols = [
-                    c for c in prep_df.columns
-                    if c not in exclude and prep_df[c].nunique() > 1
-                ]
-                # Merge encoded features with T/E
-                cox_df = prep_df.loc[df.index[df[time_col].notna() & df[event_col].notna()]].copy()
-                cox_df = cox_df[[c for c in encoded_cols if c in cox_df.columns]]
-                cox_df[time_col] = T.values
-                cox_df[event_col] = E.values
-            else:
-                cox_df = self._build_cox_df(df, num_cols, T, E, time_col, event_col)
+
+        if prep_df is not None:
+            encoded_cols = [
+                c for c in prep_df.columns
+                if c not in exclude and prep_df[c].nunique() > 1
+            ]
+            # Merge encoded features with T/E
+            cox_df = prep_df.loc[df.index[df[time_col].notna() & df[event_col].notna()]].copy()
+            cox_df = cox_df[[c for c in encoded_cols if c in cox_df.columns]]
+            cox_df[time_col] = T.values
+            cox_df[event_col] = E.values
         else:
             cox_df = self._build_cox_df(df, num_cols, T, E, time_col, event_col)
 
@@ -460,5 +460,6 @@ class SurvivalStage(BaseStage):
         if median is not None:
             parts.append(f"Median survival time: {median:.1f}.")
         if concordance is not None:
-            parts.append(f"Cox C-index: {concordance:.3f} ({'good' if concordance > 0.7 else 'moderate' if concordance > 0.6 else 'weak'} discrimination).")
+            disc = "good" if concordance > 0.7 else "moderate" if concordance > 0.6 else "weak"
+            parts.append(f"Cox C-index: {concordance:.3f} ({disc} discrimination).")
         return " ".join(parts)
