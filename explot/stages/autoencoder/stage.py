@@ -31,7 +31,7 @@ class AutoencoderStage(BaseStage):
             return self._empty_result("Not enough numeric features for DVAE training.")
 
         transformed_df = transformed_df.astype(float)
-        is_fast = getattr(config, "budget", None) and getattr(config.budget, "mode", "") == "fast"
+        is_fast = self._is_fast(config)
         min_rows = 50 if is_fast else 100
         if len(transformed_df) < min_rows:
             return self._empty_result(

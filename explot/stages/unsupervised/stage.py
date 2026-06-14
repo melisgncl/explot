@@ -32,7 +32,7 @@ class UnsupervisedStage(BaseStage):
 
         X = representation_df.values
         n_rows = X.shape[0]
-        is_fast = getattr(config, "budget", None) and getattr(config.budget, "mode", "") == "fast"
+        is_fast = self._is_fast(config)
         analysis_idx = self._analysis_indices(n_rows, is_fast)
         X_analysis = X[analysis_idx]
         if len(X_analysis) < n_rows:

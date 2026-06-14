@@ -41,6 +41,10 @@ class BaseStage(ABC):
                 missing.append(dep)
         return missing
 
+    def _is_fast(self, config) -> bool:
+        budget = getattr(config, "budget", None)
+        return bool(budget and getattr(budget, "mode", "") == "fast")
+
     @abstractmethod
     def run(self, state: Any, config: Any, hooks: Any) -> StageResult:
         raise NotImplementedError

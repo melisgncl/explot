@@ -121,8 +121,8 @@ class SupervisedStage(BaseStage):
                 "'class', 'outcome', etc. Use --target COLUMN to specify one explicitly."
             )
 
+        is_fast = self._is_fast(config)
         budget = getattr(config, "budget", None)
-        is_fast = budget and getattr(budget, "mode", "") == "fast"
         n_folds = 3 if is_fast else 5
         max_fit_rows = int(getattr(budget, "max_fit_rows_fast" if is_fast else "max_fit_rows", 3000 if is_fast else 8000))
         leakage_delta_threshold = float(getattr(budget, "leakage_delta_threshold", 0.10))
