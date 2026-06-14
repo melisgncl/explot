@@ -233,6 +233,20 @@ class AutoencoderStage(BaseStage):
 
         return self._scatter_svg(points, "DVAE latent space", "latent 1", "latent 2")
 
+    def _svg_frame(self, inner: str, title: str, xlabel: str, ylabel: str, *, width: int = 420, height: int = 260, margin: int = 34) -> str:
+        return (
+            f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {width} {height}' "
+            "style='max-width:520px;background:#f8fbfd;border:1px solid #d8e3ea;border-radius:12px'>"
+            f"<rect width='{width}' height='{height}' fill='#f8fbfd' rx='12' />"
+            f"<line x1='{margin}' y1='{height - margin}' x2='{width - margin}' y2='{height - margin}' stroke='#b6c5cf' />"
+            f"<line x1='{margin}' y1='{margin}' x2='{margin}' y2='{height - margin}' stroke='#b6c5cf' />"
+            + inner
+            + f"<text x='{width / 2:.1f}' y='20' font-size='14' text-anchor='middle' fill='#193042'>{title}</text>"
+            + f"<text x='{width / 2:.1f}' y='{height - 10}' font-size='11' text-anchor='middle' fill='#5f7584'>{xlabel}</text>"
+            + f"<text x='16' y='{height / 2:.1f}' font-size='11' text-anchor='middle' fill='#5f7584' transform='rotate(-90 16 {height / 2:.1f})'>{ylabel}</text>"
+            + "</svg>"
+        )
+
     def _scatter_svg(self, points: np.ndarray, title: str, xlabel: str, ylabel: str) -> str:
         x = points[:, 0]
         y = points[:, 1]
@@ -245,9 +259,7 @@ class AutoencoderStage(BaseStage):
             y_min -= 1.0
             y_max += 1.0
 
-        width = 420
-        height = 260
-        margin = 34
+        width, height, margin = 420, 260, 34
         chart_width = width - margin * 2
         chart_height = height - margin * 2
         circles = []
@@ -255,19 +267,7 @@ class AutoencoderStage(BaseStage):
             sx = margin + ((float(px) - x_min) / (x_max - x_min)) * chart_width
             sy = height - margin - ((float(py) - y_min) / (y_max - y_min)) * chart_height
             circles.append(f"<circle cx='{sx:.1f}' cy='{sy:.1f}' r='2.2' fill='rgba(239,125,87,0.55)' />")
-
-        return (
-            f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {width} {height}' "
-            "style='max-width:520px;background:#f8fbfd;border:1px solid #d8e3ea;border-radius:12px'>"
-            f"<rect width='{width}' height='{height}' fill='#f8fbfd' rx='12' />"
-            f"<line x1='{margin}' y1='{height - margin}' x2='{width - margin}' y2='{height - margin}' stroke='#b6c5cf' />"
-            f"<line x1='{margin}' y1='{margin}' x2='{margin}' y2='{height - margin}' stroke='#b6c5cf' />"
-            + "".join(circles)
-            + f"<text x='{width / 2:.1f}' y='20' font-size='14' text-anchor='middle' fill='#193042'>{title}</text>"
-            + f"<text x='{width / 2:.1f}' y='{height - 10}' font-size='11' text-anchor='middle' fill='#5f7584'>{xlabel}</text>"
-            + f"<text x='16' y='{height / 2:.1f}' font-size='11' text-anchor='middle' fill='#5f7584' transform='rotate(-90 16 {height / 2:.1f})'>{ylabel}</text>"
-            + "</svg>"
-        )
+        return self._svg_frame("".join(circles), title, xlabel, ylabel, width=width, height=height, margin=margin)
 
     def _line_svg(self, values: list[float], title: str, xlabel: str, ylabel: str) -> str:
         if not values:
@@ -282,9 +282,7 @@ class AutoencoderStage(BaseStage):
         arr = np.asarray(values, dtype=float)
         bins = min(24, max(8, int(np.sqrt(len(arr)))))
         counts, edges = np.histogram(arr, bins=bins)
-        width = 420
-        height = 260
-        margin = 34
+        width, height, margin = 420, 260, 34
         chart_width = width - margin * 2
         chart_height = height - margin * 2
         y_max = max(int(np.max(counts)), 1)
@@ -297,25 +295,15 @@ class AutoencoderStage(BaseStage):
             bars.append(
                 f"<rect x='{x0 + 1:.1f}' y='{y0:.1f}' width='{max(bar_w - 2, 1):.1f}' height='{bar_h:.1f}' fill='rgba(15,106,139,0.55)' />"
             )
-        return (
-            f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {width} {height}' "
-            "style='max-width:520px;background:#f8fbfd;border:1px solid #d8e3ea;border-radius:12px'>"
-            f"<rect width='{width}' height='{height}' fill='#f8fbfd' rx='12' />"
-            f"<line x1='{margin}' y1='{height - margin}' x2='{width - margin}' y2='{height - margin}' stroke='#b6c5cf' />"
-            f"<line x1='{margin}' y1='{margin}' x2='{margin}' y2='{height - margin}' stroke='#b6c5cf' />"
-            + "".join(bars)
-            + f"<text x='{width / 2:.1f}' y='20' font-size='14' text-anchor='middle' fill='#193042'>{title}</text>"
-            + f"<text x='{width / 2:.1f}' y='{height - 10}' font-size='11' text-anchor='middle' fill='#5f7584'>{xlabel}</text>"
-            + f"<text x='16' y='{height / 2:.1f}' font-size='11' text-anchor='middle' fill='#5f7584' transform='rotate(-90 16 {height / 2:.1f})'>count</text>"
+        inner = (
+            "".join(bars)
             + f"<text x='{margin:.1f}' y='{height - 18}' font-size='10' text-anchor='start' fill='#5f7584'>{edges[0]:.3f}</text>"
             + f"<text x='{width - margin:.1f}' y='{height - 18}' font-size='10' text-anchor='end' fill='#5f7584'>{edges[-1]:.3f}</text>"
-            + "</svg>"
         )
+        return self._svg_frame(inner, title, xlabel, "count", width=width, height=height, margin=margin)
 
     def _path_svg(self, x: np.ndarray, y: np.ndarray, title: str, xlabel: str, ylabel: str) -> str:
-        width = 420
-        height = 260
-        margin = 34
+        width, height, margin = 420, 260, 34
         chart_width = width - margin * 2
         chart_height = height - margin * 2
         x_min, x_max = float(np.min(x)), float(np.max(x))
@@ -328,19 +316,8 @@ class AutoencoderStage(BaseStage):
             sx = margin + ((float(px) - x_min) / max(x_max - x_min, 1e-9)) * chart_width
             sy = height - margin - ((float(py) - y_min) / (y_max - y_min)) * chart_height
             coords.append(f"{sx:.1f},{sy:.1f}")
-        path = " ".join(coords)
-        return (
-            f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {width} {height}' "
-            "style='max-width:520px;background:#f8fbfd;border:1px solid #d8e3ea;border-radius:12px'>"
-            f"<rect width='{width}' height='{height}' fill='#f8fbfd' rx='12' />"
-            f"<line x1='{margin}' y1='{height - margin}' x2='{width - margin}' y2='{height - margin}' stroke='#b6c5cf' />"
-            f"<line x1='{margin}' y1='{margin}' x2='{margin}' y2='{height - margin}' stroke='#b6c5cf' />"
-            + f"<polyline fill='none' stroke='#0f6a8b' stroke-width='2.5' points='{path}' />"
-            + f"<text x='{width / 2:.1f}' y='20' font-size='14' text-anchor='middle' fill='#193042'>{title}</text>"
-            + f"<text x='{width / 2:.1f}' y='{height - 10}' font-size='11' text-anchor='middle' fill='#5f7584'>{xlabel}</text>"
-            + f"<text x='16' y='{height / 2:.1f}' font-size='11' text-anchor='middle' fill='#5f7584' transform='rotate(-90 16 {height / 2:.1f})'>{ylabel}</text>"
-            + "</svg>"
-        )
+        inner = f"<polyline fill='none' stroke='#0f6a8b' stroke-width='2.5' points='{' '.join(coords)}' />"
+        return self._svg_frame(inner, title, xlabel, ylabel, width=width, height=height, margin=margin)
 
     def _empty_result(self, reason: str) -> StageResult:
         return StageResult(
