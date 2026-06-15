@@ -48,31 +48,14 @@ All five are fixed. See git log for implementation details.
 
 ## Open Items
 
-### O1 — Commit all uncommitted work (immediate)
+### O1 — Commit all uncommitted work ✅
 
-1,601 lines of Phase 2–3 changes are sitting in the working tree. Five new files are untracked.
-A `git checkout .` destroys all of it. Nothing else matters until this is committed.
+All Phase 2–3 changes committed. Working tree is clean.
 
-### O2 — Declare optional dependencies in `pyproject.toml` (immediate)
+### O2 — Declare optional dependencies in `pyproject.toml` ✅
 
-SHAP, UMAP, lifelines, and LightGBM are used in core stages with optional-import guards but are not
-declared in `pyproject.toml`. A clean `pip install .` produces a silently degraded product with no error.
-
-Add:
-
-```toml
-[project.optional-dependencies]
-ml = [
-  "lightgbm>=4.0",
-  "shap>=0.45",
-]
-umap = [
-  "umap-learn>=0.5",
-]
-survival = [
-  "lifelines>=0.27",
-]
-```
+Optional extras `[ml]`, `[umap]`, `[survival]`, `[autoencoder]` declared.
+`pip install "explot[ml,umap,survival]"` produces a fully-featured install.
 
 ### O3 — Fix Adult Income F1 target ✅
 
@@ -92,12 +75,9 @@ Breast Cancer Wisconsin added to `test_real_datasets.py` (library-sourced via
 The remaining five datasets (House Prices, TCGA RNA-seq, TCGA BRCA clinical, MIMIC-III,
 Stack Overflow Survey) remain as future validation targets — noted in the test matrix.
 
-### O6 — Suppress the `pd.to_datetime` UserWarning (minor)
+### O6 — Suppress the `pd.to_datetime` UserWarning ✅
 
-`profiling/stage.py:239` fires `UserWarning: Could not infer format` on every test run that
-exercises date detection. Add `format="mixed"` (pandas ≥ 2.0) or `infer_datetime_format=False`
-with explicit `dayfirst=False` to silence it. Eight warnings per real-dataset test run trains
-the reader to ignore warnings.
+`format="mixed"` applied in `profiling/stage.py`. Warning no longer fires in the test suite.
 
 ### O7 — Confusion matrix click-through (explicitly deferred)
 

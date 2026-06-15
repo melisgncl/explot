@@ -5,10 +5,9 @@
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**[Live Demo](https://melisgncl.github.io/explot/)** · [Credit Card Fraud Report](https://melisgncl.github.io/explot/reports/creditcard_fraud_report.html) · [Telco Churn Report](https://melisgncl.github.io/explot/reports/telco_churn_report.html)
+**[Live Demo](https://melisgncl.github.io/explot/)** · [Credit Card Fraud Report](https://melisgncl.github.io/explot/reports/creditcard_fraud_report.html) · [Telco Churn Report](https://melisgncl.github.io/explot/reports/telco_churn_report.html) · [scRNA-seq Simulated Report](https://melisgncl.github.io/explot/reports/scrna_simulated_report.html)
 
 ![Explot report preview](docs/images/explot-demo-preview.svg)
-<!-- replace with real PNG screenshot when available -->
 
 **You have a dataset and don't know where to start.** Which model fits? Which features matter? Is there even structure worth modeling — and can you trust the result? Explot is a first-pass triage that answers those questions from a single CSV, before you commit to an analysis plan.
 
